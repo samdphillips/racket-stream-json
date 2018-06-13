@@ -27,12 +27,6 @@
 (struct js-array-start js-event () #:transparent)
 (struct js-array-end   js-event () #:transparent)
 
-(struct js-null js-event () #:transparent)
-
-(define (js-atom? v)
-  (or (js-value? v)
-      (js-null? v)))
-
 (define ((make-js-value-pred pred?) v)
   (and (js-value? v)
        (pred? (js-value-v v))))
@@ -146,7 +140,7 @@
        (read-js-event inp)]
 
       [(peek "null")
-       (js-null (source-location))]
+       (js-value (source-location) 'null)]
 
       [(peek "true")
        (js-value (source-location) #t)]
@@ -203,7 +197,7 @@
     (test-read " }" (js-object-end #f))
     (test-read " [" (js-array-start #f))
     (test-read " ]" (js-array-end #f))
-    (test-read " null" (js-null #f))
+    (test-read " null" (js-value #f 'null))
     (test-read " :" #\:)
     (test-read " ," #\,)
     (test-read " true" (js-value #f #t))
@@ -286,7 +280,7 @@
 
   (define (check-value v)
     (cond
-      [(js-atom? v)         check-value]
+      [(js-value? v)         check-value]
       [(js-array-start? v)  (check-array check-value)]
       [(js-object-start? v) (check-object-key check-value)]
       [else
@@ -294,7 +288,7 @@
 
   (define ((check-array k) v)
     (cond
-      [(js-atom? v)         (check-array k)]
+      [(js-value? v)         (check-array k)]
       [(js-array-start? v)  (check-array (check-array k))]
       [(js-array-end? v)    k]
       [(js-object-start? v) (check-object-key (check-array k))]
@@ -311,7 +305,7 @@
 
   (define ((check-object-value k) v)
     (cond
-      [(js-atom? v) (check-object-key k)]
+      [(js-value? v) (check-object-key k)]
       [(js-array-start? v)  (check-array (check-object-key k))]
       [(js-object-start? v) (check-object-key (check-object-key k))]
       [else
@@ -375,8 +369,7 @@
 ;; expects a well formed stream of events
 (define (js-stream->jsexpr s)
   (match s
-    [(stream-cons (js-value _ v) s)     (values v s)]
-    [(stream-cons (js-null _) s)        (values 'null s)]
+    [(stream-cons (js-value _ v) s) (values v s)]
     [(stream-cons (js-array-start _) s)
      (js-stream->jsexpr-list s)]
     [(stream-cons (js-object-start _) s)
@@ -403,12 +396,13 @@
 
 (module+ test
   (test-case "stream->jsexpr one value"
-             (let-values ([(v s) (js-stream->jsexpr (list (js-null #f)))])
+             (let-values ([(v s) (js-stream->jsexpr
+                                  (list (js-value #f 'null)))])
                (check-eq? v 'null)
                (check-true (stream-empty? s))))
 
   (test-case "stream->jsexpr two value"
-             (let ([e* (list (js-null #f) (js-value #f 42))])
+             (let ([e* (list (js-value #f 'null) (js-value #f 42))])
                (let-values ([(v s) (js-stream->jsexpr e*)])
                  (check-eq? v 'null)
                  (check-false (stream-empty? s))
@@ -461,7 +455,7 @@
      (callback (js-value #f e))]
 
     ['null
-     (callback (js-null #f))]
+     (callback (js-value #f 'null))]
 
     [(hash-table (k* v*) ...)
      (callback (js-object-start #f))
@@ -488,7 +482,7 @@
                        (js-value #f 2)
                        (js-value #f 3)
                        (js-value #f 4)
-                       (js-null #f)
+                       (js-value #f 'null)
                        (js-array-end #f)
                        (js-object-key #f 'b)
                        (js-value #f "c")
