@@ -124,8 +124,8 @@
          (vector (object-name port) line col pos 0))))
 
 ;; read-js-event
-;; input-port -> (U js-event delimiter eof-object)
-;;  where delimiter is one of #\: #\,
+;; input-port -> (U js-event eof-object)
+;;  js-event includes delimiters (js-value _ #\:) and (js-value _ #\,)
 (define (read-js-event inp)
   (let* ([start-loc (port->source-location inp)]
          [source-location
@@ -160,10 +160,11 @@
       [(peek #\])
        (js-array-end (source-location))]
 
-      [(peek #\:) #\:]
+      [(peek #\:) (js-value (source-location) #\:)]
 
-      [(peek #\,) #\,]
+      [(peek #\,) (js-value (source-location) #\,)]
 
+      ;; XXX: understand exponential notation
       [(peek #px"^-?\\d+(\\.\\d+)?" s)
        (js-value (source-location) (string->number s))]
 
@@ -198,8 +199,8 @@
     (test-read " [" (js-array-start #f))
     (test-read " ]" (js-array-end #f))
     (test-read " null" (js-value #f 'null))
-    (test-read " :" #\:)
-    (test-read " ," #\,)
+    (test-read " :" (js-value #f #\:))
+    (test-read " ," (js-value #f #\,))
     (test-read " true" (js-value #f #t))
     (test-read " false" (js-value #f #f))
 
@@ -210,8 +211,10 @@
     (test-read " { } " (js-object-start #f) (js-object-end #f))
     (test-read "{ \"a\": \"b\", \"c\": 42 }"
                (js-object-start #f)
-               (js-value #f "a") #\: (js-value #f "b") #\,
-               (js-value #f "c") #\: (js-value #f 42)
+               (js-value #f "a") (js-value #f #\:)
+               (js-value #f "b") (js-value #f #\,)
+               (js-value #f "c") (js-value #f #\:)
+               (js-value #f 42)
                (js-object-end #f)))
   )
 
