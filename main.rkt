@@ -22,7 +22,9 @@
 
 (struct js-object-start js-event () #:transparent)
 (struct js-object-end   js-event () #:transparent)
-(struct js-object-key   js-event (name) #:transparent)
+
+(struct js-member-start js-event (name) #:transparent)
+(struct js-member-end   js-event () #:transparent)
 
 (struct js-array-start js-event () #:transparent)
 (struct js-array-end   js-event () #:transparent)
@@ -220,6 +222,8 @@
 
 ;; minimal stream and stream-cons match expanders
 ;; stream /only/ matches on first two elements and the rest
+
+;; XXX: maybe just generalize stream* (in terms of stream-cons)
 (define-match-expander stream-cons
   (syntax-rules ()
     [(_ a b)
@@ -238,18 +242,6 @@
   (make-rename-transformer #'$tream))
 
 
-;; clean-js-delimiters
-;; stream[U js-event #\: #\,] -> stream[js-event]
-;; converts <string, #\:> sequences to js-object-key and removes #\,
-(define (clean-js-delimiters s)
-  (match s
-    [(? stream-empty?) s]
-    [(stream (js-value loc (? string? k)) #\: s)
-     (stream-cons (js-object-key loc k)
-                  (clean-js-delimiters s))]
-    [(stream-cons #\, s) (clean-js-delimiters s)]
-    [(stream-cons x s) (stream-cons x (clean-js-delimiters s))]))
-
 ;; wf-js-stream
 ;; stream[js-event] -> stream[js-event]
 ;; checks a stream for well-formedness as it is streaming
@@ -264,57 +256,91 @@
   output stream
 |#
 
-(define (wf-js-stream s)
+(define (wf-js-stream jst)
   ; XXX: use source location in reporting
-  (define (wf-error expected actual)
+  (define (wf-error state expected actual)
     (error 'wf-js-stream
-           "incorrect state expected: ~a, got: ~a"
+           "~a incorrect state expected: ~a, got: ~a"
+           state
            expected
            actual))
 
-  (define (next check s)
-    (cond
-      [(stream-empty? s) s]
-      [else
-       (let* ([v (stream-first s)]
-              [s (stream-rest s)]
-              [check (check v)])
-         (stream-cons v (next check s)))]))
+  ;; XXX: error if hit end of stream
+  (define (next check s0)
+    (match s0
+      [(? stream-empty?) s0]
+      [(stream-cons v s1) (check v s1 s0)]))
 
-  (define (check-value v)
-    (cond
-      [(js-value? v)         check-value]
-      [(js-array-start? v)  (check-array check-value)]
-      [(js-object-start? v) (check-object-key check-value)]
-      [else
-       (wf-error '(atom array-start object-start) v)]))
+  (define ((check-value k [tag 'value] [expects null]) v s1 s0)
+    (match v
+      [(js-value _ (not (or #\: #\,)))
+       (stream* v (next k s1))]
+      [(? js-array-start?)
+       (stream* v (next (check-array-start k) s1))]
+      [(? js-object-start?)
+       (stream* v (next (check-object-start k) s1))]
+      [_
+       (wf-error tag (append expects '(atom array-start object-start)) v)]))
 
-  (define ((check-array k) v)
-    (cond
-      [(js-value? v)         (check-array k)]
-      [(js-array-start? v)  (check-array (check-array k))]
-      [(js-array-end? v)    k]
-      [(js-object-start? v) (check-object-key (check-array k))]
-      [else
-       (wf-error '(atom array-start array-end object-start)
-                 v)]))
+  (define ((check-array-start k) v s1 s0)
+    (match v
+      [(? js-array-end?)
+       (stream* v (next k s1))]
+      [_ (next (check-value (check-array-delim k)
+                            'array-start
+                            '(array-end))
+               s0)]))
 
-  (define ((check-object-key k) v)
-    (cond
-      [(js-object-key? v) (check-object-value k)]
-      [(js-object-end? v) k]
-      [else
-       (wf-error '(object-key) v)]))
+  (define ((check-array-delim k) v s1 s0)
+    (match v
+      [(js-value _ #\,)  (next (check-array-value k) s1)]
+      [(? js-array-end?) (stream* v (next k s1))]
+      [_ (wf-error '(#\, array-end) v)]))
 
-  (define ((check-object-value k) v)
-    (cond
-      [(js-value? v) (check-object-key k)]
-      [(js-array-start? v)  (check-array (check-object-key k))]
-      [(js-object-start? v) (check-object-key (check-object-key k))]
-      [else
-       (wf-error '(atom array-start object-start) v)]))
+  (define ((check-array-value k) v s1 s0)
+    (match v
+      [(? js-array-end?)
+       (stream* v (next k s1))]
+      [_ (next (check-value (check-array-delim k)
+                            'array-value
+                            '(array-end))
+               s0)]))
 
-  (next check-value s))
+  (define ((check-object-start k) v s1 s0)
+    (match v
+      [(? js-object-end? v)
+       (stream* v (next k s1))]
+      [(js-value loc (? string? v))
+       (stream* (js-member-start loc v)
+                (next (check-object-kv-delim k) s1))]
+      [_ (wf-error 'object-start '(object-key object-end) v)]))
+
+  (define ((check-object-key k) v s1 s0)
+    (match v
+      [(js-value _ (? string?))
+       (stream* v (next (check-object-kv-delim k) s1))]
+      [_ (wf-error 'object-key '(object-key) v)]))
+
+  (define ((check-object-kv-delim k) v s1 s0)
+    (match v
+      [(js-value _ #\:)
+       (next (check-value (check-object-delim k)
+                          'object-value)
+             s1)]
+      [_ (wf-error 'object-kv-delim '(#\:) v)]))
+
+  (define ((check-object-delim k) v s1 s0)
+    (match v
+      [(js-object-end loc)
+       (stream* (js-member-end loc) v (next k s1))]
+      [(js-value loc #\,)
+       (stream* (js-member-end loc) (next (check-object-key k) s1))]
+      [_ (wf-error 'object-delim '(object-end #\,) v)]))
+
+  (next (letrec ([k (lambda (v s1 s0) ((check-value k) v s1 s0))])
+          (check-value k))
+        jst))
+
 
 (module+ test
   (test-case "wf-js-stream atoms - ok"
@@ -327,6 +353,18 @@
              (let ([s (list (js-value #f 1) (js-value #f 2))])
                (check-false (stream-empty? (wf-js-stream s)))))
 
+  (test-case "wf-js-stream atoms - no delimiters"
+             (check-exn #px"incorrect state"
+                        (lambda ()
+                          (stream->list
+                           (wf-js-stream
+                            (list (js-value #f #\,))))))
+             (check-exn #px"incorrect state"
+                        (lambda ()
+                          (stream->list
+                           (wf-js-stream
+                            (list (js-value #f #\:)))))))
+
   (test-case "wf-js-stream array - ok"
              (let ([s (list (js-array-start #f)
                             (js-value #f 42)
@@ -334,6 +372,22 @@
                (for ([a (in-list s)]
                      [b (in-stream (wf-js-stream s))])
                  (check-equal? a b))))
+
+  (test-case "wf-js-stream array - ok"
+             (let ([s (list (js-array-start #f)
+                            (js-value #f 42)
+                            (js-value #f #\,)
+                            (js-value #f 3)
+                            (js-value #f #\,)
+                            (js-value #f 4)
+                            (js-value #f #\,)
+                            (js-array-end #f))])
+               (for ([expected (sequence-filter (match-lambda
+                                                  [(js-value _ #\,) #f]
+                                                  [_ #t])
+                                                (in-list s))]
+                     [actual (in-stream (wf-js-stream s))])
+                 (check-equal? actual expected))))
 
   (test-case "wf-js-stream deeper array - ok"
              (let ([s (list (js-array-start #f)
@@ -346,21 +400,29 @@
                  (check-equal? a b))))
 
   (test-case "wf-js-stream object - ok"
-             (let ([s (list (js-object-start #f)
-                            (js-object-key #f 'foo)
-                            (js-value #f 42)
-                            (js-object-end #f))])
-               (for ([a (in-list s)]
-                     [b (in-stream (wf-js-stream s))])
+             (let ([in (list (js-object-start #f)
+                             (js-value #f "foo")
+                             (js-value #f #\:)
+                             (js-value #f 42)
+                             (js-object-end #f))]
+                   [out (list (js-object-start #f)
+                              (js-member-start #f "foo")
+                              (js-value #f 42)
+                              (js-member-end #f)
+                              (js-object-end #f))])
+               (for ([b (in-list out)]
+                     [a (in-stream (wf-js-stream in))])
                  (check-equal? a b))))
 
   (test-case "wf-js-stream object - malformed kv sequence"
              (let ([s (list (js-object-start #f)
-                            (js-object-key #f 'foo)
+                            (js-value #f "foo")
+                            (js-value #f #\:)
                             (js-value #f 42)
+                            (js-value #f #\,)
                             (js-value #f "bad")
                             (js-object-end #f))])
-               (check-exn #px"incorrect state"
+               (check-exn #px"kv-delim"
                           (lambda ()
                             (stream->list (wf-js-stream s))))))
   )
