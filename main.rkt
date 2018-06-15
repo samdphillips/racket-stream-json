@@ -455,25 +455,27 @@
 (define (js-stream->jsexpr-hash acc s)
   (match s
     [(stream-cons (js-object-end _) s) (values acc s)]
-    [(stream-cons (js-object-key _ k) s)
-     (let*-values ([(v s) (js-stream->jsexpr s)])
+    [(stream-cons (js-member-end _) s) (js-stream->jsexpr-hash acc s)]
+    [(stream-cons (js-member-start _ k) s)
+     (let-values ([(v s) (js-stream->jsexpr s)]
+                  [(k) (string->symbol k)])
        (js-stream->jsexpr-hash (hash-set acc k v) s))]))
 
 (module+ test
-  (test-case "stream->jsexpr one value"
+  (test-case "js-stream->jsexpr one value"
              (let-values ([(v s) (js-stream->jsexpr
                                   (list (js-value #f 'null)))])
                (check-eq? v 'null)
                (check-true (stream-empty? s))))
 
-  (test-case "stream->jsexpr two value"
+  (test-case "js-stream->jsexpr two value"
              (let ([e* (list (js-value #f 'null) (js-value #f 42))])
                (let-values ([(v s) (js-stream->jsexpr e*)])
                  (check-eq? v 'null)
                  (check-false (stream-empty? s))
                  (check-equal? (stream-first s) (js-value #f 42)))))
 
-  (test-case "stream->jsexpr array"
+  (test-case "js-stream->jsexpr array"
              (let ([e* (list (js-array-start #f)
                              (js-value #f 1)
                              (js-value #f 2)
@@ -483,20 +485,22 @@
                  (check-equal? v (list 1 2 3))
                  (check-true (stream-empty? s)))))
 
-  (test-case "stream->jsexpr hash"
+  (test-case "js-stream->jsexpr hash"
              (let ([e* (list (js-object-start #f)
-                             (js-object-key #f 'a)
+                             (js-member-start #f "a")
                              (js-array-start #f)
                              (js-value #f 1)
                              (js-value #f 2)
                              (js-value #f 3)
                              (js-array-end #f)
-                             (js-object-key #f 'b)
+                             (js-member-end #f)
+                             (js-member-start #f "b")
                              (js-array-start #f)
                              (js-value #f 4)
                              (js-value #f 5)
                              (js-value #f 6)
                              (js-array-end #f)
+                             (js-member-end #f)
                              (js-object-end #f))])
                (let-values ([(v s) (js-stream->jsexpr e*)])
                  (check-equal? v (hasheq 'a (list 1 2 3)
@@ -526,8 +530,9 @@
      (callback (js-object-start #f))
      (for ([k (in-list k*)]
            [v (in-list v*)])
-       (callback (js-object-key #f k))
-       (jsexpr-walk v callback))
+       (callback (js-member-start #f (symbol->string k)))
+       (jsexpr-walk v callback)
+       (callback (js-member-end #f)))
      (callback (js-object-end #f))]
 
     [(list e* ...)
@@ -541,7 +546,7 @@
     (test-equal? "jsexpr->js-stream"
                  (stream->list (jsexpr->js-stream o))
                  (list (js-object-start #f)
-                       (js-object-key #f 'a)
+                       (js-member-start #f "a")
                        (js-array-start #f)
                        (js-value #f 1)
                        (js-value #f 2)
@@ -549,8 +554,10 @@
                        (js-value #f 4)
                        (js-value #f 'null)
                        (js-array-end #f)
-                       (js-object-key #f 'b)
+                       (js-member-end #f)
+                       (js-member-start #f "b")
                        (js-value #f "c")
+                       (js-member-end #f)
                        (js-object-end #f))))
   )
 
