@@ -428,6 +428,79 @@
   )
 
 
+(define (make-js-stream-fold
+         #:on-value        on-value
+         #:on-array-start  on-array-start
+         #:on-array-end    on-array-end
+         #:on-object-start on-object-start
+         #:on-object-end   on-object-end
+         #:on-member-start on-member-start
+         #:on-member-end   on-member-end
+         )
+  (define (do-fold pseed seed s)
+    (cond
+      [(stream-empty? s) seed]
+      [else
+       (let ([v (stream-first s)]
+             [s (stream-rest s)])
+         (match v
+           [(? js-value?)
+            (do-fold pseed (on-value seed v) s)]
+           [(? js-array-start?)
+            (do-fold (cons seed pseed) (on-array-start seed v) s)]
+           [(? js-array-end?)
+            (do-fold (cdr pseed) (on-array-end (car pseed) seed v) s)]
+           [(? js-object-start?)
+            (do-fold (cons seed pseed) (on-object-start seed v) s)]
+           [(? js-object-end?)
+            (do-fold (cdr pseed) (on-object-end (car pseed) seed v) s)]
+           [(js-member-start _ key)
+            (do-fold (list* seed key pseed) (on-member-start seed v) s)]
+           [(? js-member-end?)
+            (match-let ([(list parent key pseed ...) pseed])
+              (do-fold pseed (on-member-end parent key seed v) s))]))]))
+  (lambda (seed s)
+    (do-fold null seed s)))
+
+(module+ test
+  (let ([simple-js-fold jsexpr-fold])
+    (check-equal?
+     (simple-js-fold null (list (js-value #f 42)))
+     '(42))
+
+    (check-equal?
+     (simple-js-fold
+      null (list (js-value #f 42) (js-value #f 85)))
+     '(85 42))
+
+    (check-equal?
+     (simple-js-fold
+      null (list (js-array-start #f)
+                 (js-value #f 42)
+                 (js-value #f 85)
+                 (js-array-end #f)))
+     '((42 85)))
+
+    (check-equal?
+     (simple-js-fold
+      null (list (js-array-start #f)
+                 (js-array-end #f)))
+     '(()))
+
+    (check-equal?
+     (simple-js-fold
+      null (list (js-object-start #f)
+                 (js-object-end #f)))
+     '(#hasheq()))
+
+    (check-equal?
+     (simple-js-fold
+      null (list (js-object-start #f)
+                 (js-member-start #f "a")
+                 (js-value #f 42)
+                 (js-member-end #f)
+                 (js-object-end #f)))
+     '(#hasheq([a . 42])))))
 
 ;; js-stream->jsexpr
 ;; stream[js-event] -> <jsexpr, stream[js-event]>
@@ -460,6 +533,29 @@
      (let-values ([(v s) (js-stream->jsexpr s)]
                   [(k) (string->symbol k)])
        (js-stream->jsexpr-hash (hash-set acc k v) s))]))
+
+(define jsexpr-fold
+  (make-js-stream-fold
+   #:on-value
+   (lambda (seed v)
+     (cons (js-value-v v) seed))
+   #:on-array-start
+   (lambda (seed v) null)
+   #:on-array-end
+   (lambda (pseed seed v)
+     (cons (reverse seed) pseed))
+   #:on-object-start
+   (lambda (seed v)
+     (hasheq))
+   #:on-object-end
+   (lambda (pseed seed v)
+     (cons seed pseed))
+   #:on-member-start
+   (lambda (seed v) '())
+   #:on-member-end
+   (lambda (pseed k seed v)
+     (hash-set pseed (string->symbol k) (car seed)))))
+
 
 (module+ test
   (test-case "js-stream->jsexpr one value"
@@ -558,6 +654,5 @@
                        (js-member-start #f "b")
                        (js-value #f "c")
                        (js-member-end #f)
-                       (js-object-end #f))))
-  )
+                       (js-object-end #f)))))
 
