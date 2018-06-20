@@ -1,10 +1,11 @@
 #lang racket/base
 
-(require racket/generator
+(require racket/contract
+         racket/generator
          racket/match
          racket/port
          (rename-in racket/stream
-                    [stream $tream]
+                    [stream* $tream*]
                     [stream-cons $tream-cons])
          syntax/srcloc
 
@@ -118,8 +119,7 @@
                    "world"
                    (string #\\ #\" #\"))
     read-js-string)
-   (string-append "hello " (string #\") "world" (string #\")))
-  )
+   (string-append "hello " (string #\") "world" (string #\"))))
 
 (define (port->source-location port)
   (and (port-count-lines-enabled)
@@ -174,9 +174,11 @@
        (let ([s (read-js-string inp)])
          (js-value (source-location) s))])))
 
-(define (port->js-stream inp)
-  (sequence->stream
-   (in-port read-js-event inp)))
+(define (port->js-stream inp #:well-formed? [wf? #f])
+  (let ([wf (if wf? wf-js-stream values)])
+    (wf
+     (sequence->stream
+      (in-port read-js-event inp)))))
 
 (module+ test
   (let-syntax ([test-read
@@ -235,12 +237,12 @@
              a b))])
   (make-rename-transformer #'$tream-cons))
 
-(define-match-expander stream
+(define-match-expander stream*
   (syntax-rules ()
-    [(_ a b c)
-     (stream-cons a (stream-cons b c))])
-  (make-rename-transformer #'$tream))
-
+    [(_ a) a]
+    [(_ a b ...)
+     (stream-cons a (stream* b ...))])
+  (make-rename-transformer #'$tream*))
 
 ;; wf-js-stream
 ;; stream[js-event] -> stream[js-event]
@@ -269,7 +271,7 @@
   (define (next check s0)
     (match s0
       [(? stream-empty?) s0]
-      [(stream-cons v s1) (check v s1 s0)]))
+      [(stream* v s1) (check v s1 s0)]))
 
   (define ((check-value k [error-tag 'value] [expects null]) v s1 s0)
     (match v
@@ -429,7 +431,7 @@
                           (lambda ()
                             (stream->list (wf-js-stream s)))))))
 
-
+;; XXX: flag to read a single item from the stream
 (define (make-js-stream-fold
          #:on-value        on-value
          #:on-array-start  on-array-start
@@ -437,8 +439,7 @@
          #:on-object-start on-object-start
          #:on-object-end   on-object-end
          #:on-member-start on-member-start
-         #:on-member-end   on-member-end
-         )
+         #:on-member-end   on-member-end)
   (define (do-fold pseed seed s)
     (cond
       [(stream-empty? s) seed]
@@ -465,61 +466,60 @@
     (do-fold null seed s)))
 
 (module+ test
-  (let ([simple-js-fold jsexpr-fold])
-    (check-equal?
-     (simple-js-fold null (list (js-value #f 42)))
-     '(42))
+  (check-equal?
+   (jsexpr-fold null (list (js-value #f 42)))
+   '(42))
 
-    (check-equal?
-     (simple-js-fold
-      null (list (js-value #f 42) (js-value #f 85)))
-     '(85 42))
+  (check-equal?
+   (jsexpr-fold
+    null (list (js-value #f 42) (js-value #f 85)))
+   '(85 42))
 
-    (check-equal?
-     (simple-js-fold
-      null (list (js-array-start #f)
-                 (js-value #f 42)
-                 (js-value #f 85)
-                 (js-array-end #f)))
-     '((42 85)))
+  (check-equal?
+   (jsexpr-fold
+    null (list (js-array-start #f)
+               (js-value #f 42)
+               (js-value #f 85)
+               (js-array-end #f)))
+   '((42 85)))
 
-    (check-equal?
-     (simple-js-fold
-      null (list (js-array-start #f)
-                 (js-array-end #f)))
-     '(()))
+  (check-equal?
+   (jsexpr-fold
+    null (list (js-array-start #f)
+               (js-array-end #f)))
+   '(()))
 
-    (check-equal?
-     (simple-js-fold
-      null (list (js-object-start #f)
-                 (js-object-end #f)))
-     '(#hasheq()))
+  (check-equal?
+   (jsexpr-fold
+    null (list (js-object-start #f)
+               (js-object-end #f)))
+   '(#hasheq()))
 
-    (check-equal?
-     (simple-js-fold
-      null (list (js-object-start #f)
-                 (js-member-start #f "a")
-                 (js-value #f 42)
-                 (js-member-end #f)
-                 (js-object-end #f)))
-     '(#hasheq([a . 42])))))
+  (check-equal?
+   (jsexpr-fold
+    null (list (js-object-start #f)
+               (js-member-start #f "a")
+               (js-value #f 42)
+               (js-member-end #f)
+               (js-object-end #f)))
+   '(#hasheq([a . 42]))))
 
 ;; js-stream->jsexpr
 ;; stream[js-event] -> <jsexpr, stream[js-event]>
 ;; expects a well formed stream of events
 (define (js-stream->jsexpr s)
   (match s
-    [(stream-cons (js-value _ v) s) (values v s)]
-    [(stream-cons (js-array-start _) s)
+    [(stream* (js-value _ v) s) (values v s)]
+    [(stream* (js-array-start _) s)
      (js-stream->jsexpr-list s)]
-    [(stream-cons (js-object-start _) s)
+    [(stream* (js-object-start _) s)
      (js-stream->jsexpr-hash (hasheq) s)]))
 
 ;; js-stream->jsexpr-list
 ;; stream[js-event] -> <jslist, stream[js-event]>
 (define (js-stream->jsexpr-list s)
   (match s
-    [(stream-cons (js-array-end _) s) (values null s)]
+    [(stream* (js-array-end _) s) (values null s)]
     [_
      (let*-values ([(head s) (js-stream->jsexpr s)]
                    [(tail s) (js-stream->jsexpr-list s)])
@@ -529,9 +529,9 @@
 ;; hash stream[js-event] -> <jshash, stream[js-event]>
 (define (js-stream->jsexpr-hash acc s)
   (match s
-    [(stream-cons (js-object-end _) s) (values acc s)]
-    [(stream-cons (js-member-end _) s) (js-stream->jsexpr-hash acc s)]
-    [(stream-cons (js-member-start _ k) s)
+    [(stream* (js-object-end _) s) (values acc s)]
+    [(stream* (js-member-end _) s) (js-stream->jsexpr-hash acc s)]
+    [(stream* (js-member-start _ k) s)
      (let-values ([(v s) (js-stream->jsexpr s)]
                   [(k) (string->symbol k)])
        (js-stream->jsexpr-hash (hash-set acc k v) s))]))
@@ -658,3 +658,39 @@
                        (js-member-end #f)
                        (js-object-end #f)))))
 
+
+(provide
+ (contract-out
+  (struct js-value
+    [(location source-location?)
+     (v (or/c number? string?))])
+  (struct js-delim
+    [(location source-location?)
+     (tok (or/c #\: #\,))])
+  (struct js-object-start [(location source-location?)])
+  (struct js-object-end   [(location source-location?)])
+  (struct js-array-start  [(location source-location?)])
+  (struct js-array-end    [(location source-location?)])
+  (struct js-member-start
+    [(location source-location?)
+     (name string?)])
+  (struct js-member-end
+    [(location source-location?)])
+
+  (js-event? (-> any/c boolean?))
+  (read-js-event
+   (-> input-port? (or/c eof-object? js-event?)))
+  (port->js-stream
+   (-> input-port? (stream/c js-event?)))
+  (wf-js-stream
+   (-> (stream/c js-event?) (stream/c js-event?)))
+
+  (make-js-stream-fold
+   (-> #:on-value        (-> any/c js-value? any)
+       #:on-array-start  (-> any/c js-array-start? any)
+       #:on-array-end    (-> any/c any/c js-array-end? any)
+       #:on-object-start (-> any/c js-object-start? any)
+       #:on-object-end   (-> any/c any/c js-object-end? any)
+       #:on-member-start (-> any/c js-member-start? any)
+       #:on-member-end   (-> any/c string? any/c js-member-end? any)
+       (-> any/c (stream/c js-event?) any)))))
