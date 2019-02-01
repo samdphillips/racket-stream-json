@@ -17,26 +17,26 @@
            racket/format
            racket/sequence))
 
-(struct js-event (location) #:transparent)
+(struct json-event (location) #:transparent)
 
-(struct js-value js-event (v) #:transparent)
-(struct js-delim js-event (tok) #:transparent)
+(struct json-value json-event (v) #:transparent)
+(struct json-delimiter json-event (tok) #:transparent)
 
-(struct js-object-start js-event () #:transparent)
-(struct js-object-end   js-event () #:transparent)
+(struct json-object-start json-event () #:transparent)
+(struct json-object-end   json-event () #:transparent)
 
-(struct js-member-start js-event (name) #:transparent)
-(struct js-member-end   js-event () #:transparent)
+(struct json-member-start json-event (name) #:transparent)
+(struct json-member-end   json-event () #:transparent)
 
-(struct js-array-start js-event () #:transparent)
-(struct js-array-end   js-event () #:transparent)
+(struct json-array-start json-event () #:transparent)
+(struct json-array-end   json-event () #:transparent)
 
-(define ((make-js-value-pred pred?) v)
-  (and (js-value? v)
-       (pred? (js-value-v v))))
+(define ((make-json-value-pred pred?) v)
+  (and (json-value? v)
+       (pred? (json-value-v v))))
 
-(define js-string? (make-js-value-pred string?))
-(define js-number? (make-js-value-pred number?))
+(define json-value-string? (make-json-value-pred string?))
+(define json-value-number? (make-json-value-pred number?))
 
 (define ($peek-char inp)
   (values (peek-char inp) inp))
@@ -73,10 +73,10 @@
                 #'($regexp-try-match rxpat)
                 #'values)]))))
 
-;; read-js-string
+;; read-json-string
 ;; input-port -> string
 ;; XXX: add rest of escapes
-(define (read-js-string inp)
+(define (read-json-string inp)
   (call-with-output-string
    (lambda (outp)
      (let/ec done
@@ -87,48 +87,30 @@
            [(peek "\\\\") (write-char #\\ outp)]
            [(peek #px"^[^\\\\\"]+" s) (write-string s outp)]
            [(app (lambda (inp) (peek-string 5 0 inp)) s)
-            (error 'read-js-string "got: ~s" s)]
-           )
+            (error 'read-json-string "got: ~s" s)])
          (read-piece))
        (read-piece)))))
 
-
 (module+ test
-  (check-equal?
-   (call-with-input-string
-    (string #\\ #\" #\")
-    read-js-string)
-   (string #\"))
+  (define-syntax -test-string
+    (syntax-rules ()
+      [(_ input expected)
+       (check-equal? (call-with-input-string input read-json-string) expected)]))
 
-  (check-equal?
-   (call-with-input-string
-    (string #\")
-    read-js-string)
-   "")
-
-  (check-equal?
-   (call-with-input-string
-    (string #\\ #\\ #\")
-    read-js-string)
-   (string #\\))
-
-  (check-equal?
-   (call-with-input-string
-    (string-append "hello "
-                   (string #\\ #\")
-                   "world"
-                   (string #\\ #\" #\"))
-    read-js-string)
-   (string-append "hello " (string #\") "world" (string #\"))))
+  (-test-string (string #\\ #\" #\") (string #\"))
+  (-test-string (string #\") "")
+  (-test-string (string #\\ #\\ #\") (string #\\))
+  (-test-string (~a "hello " (string #\\ #\") "world" (string #\\ #\" #\"))
+                (~a "hello " (string #\") "world" (string #\"))))
 
 (define (port->source-location port)
   (and (port-count-lines-enabled)
        (let-values ([(line col pos) (port-next-location port)])
          (vector (object-name port) line col pos 0))))
 
-;; read-js-event
-;; input-port -> (U js-event eof-object)
-(define (read-js-event inp)
+;; read-json-event
+;; input-port -> (U json-event eof-object)
+(define (read-json-event inp)
   (let* ([start-loc (port->source-location inp)]
          [source-location
           (lambda ()
@@ -139,88 +121,85 @@
       [(app peek-char (? eof-object? v)) v]
 
       [(peek #px"^\\s+")
-       (read-js-event inp)]
+       (read-json-event inp)]
 
       [(peek "null")
-       (js-value (source-location) 'null)]
+       (json-value (source-location) 'null)]
 
       [(peek "true")
-       (js-value (source-location) #t)]
+       (json-value (source-location) #t)]
 
       [(peek "false")
-       (js-value (source-location) #f)]
+       (json-value (source-location) #f)]
 
       [(peek #\{)
-       (js-object-start (source-location))]
+       (json-object-start (source-location))]
 
       [(peek #\})
-       (js-object-end (source-location))]
+       (json-object-end (source-location))]
 
       [(peek #\[)
-       (js-array-start (source-location))]
+       (json-array-start (source-location))]
 
       [(peek #\])
-       (js-array-end (source-location))]
+       (json-array-end (source-location))]
 
-      [(peek #\:) (js-delim (source-location) #\:)]
+      [(peek #\:) (json-delimiter (source-location) #\:)]
 
-      [(peek #\,) (js-delim (source-location) #\,)]
+      [(peek #\,) (json-delimiter (source-location) #\,)]
 
       ;; XXX: understand exponential notation
       [(peek #px"^-?\\d+(\\.\\d+)?" s)
-       (js-value (source-location) (string->number s))]
+       (json-value (source-location) (string->number s))]
 
       [(peek #\")
-       (let ([s (read-js-string inp)])
-         (js-value (source-location) s))])))
+       (let ([s (read-json-string inp)])
+         (json-value (source-location) s))])))
 
-(define (port->js-stream inp #:well-formed? [wf? #f])
-  (let ([wf (if wf? wf-js-stream values)])
+(define (port->json-stream inp #:well-formed? [wf? #f])
+  (let ([wf (if wf? json-stream/well-formed values)])
     (wf
      (sequence->stream
-      (in-port read-js-event inp)))))
+      (in-port read-json-event inp)))))
 
 (module+ test
-  (let-syntax ([test-read
-                (syntax-rules ()
-                  [(_ input token)
-                   (test-case
-                    (~a "read " 'token " token")
-                    (check-equal?
-                     (call-with-input-string input read-js-event)
-                     token))]
-                  [(_ input token0 token ...)
-                   (test-case
-                    (~a "read " 'token0 " token starting sequence")
-                    (check-equal?
-                     (call-with-input-string
-                      input (lambda (inp)
-                              (sequence->list (in-port read-js-event inp))))
-                     (list token0 token ...)))]
-                  )])
-    (test-read " {" (js-object-start #f))
-    (test-read " }" (js-object-end #f))
-    (test-read " [" (js-array-start #f))
-    (test-read " ]" (js-array-end #f))
-    (test-read " null" (js-value #f 'null))
-    (test-read " :" (js-delim #f #\:))
-    (test-read " ," (js-delim #f #\,))
-    (test-read " true" (js-value #f #t))
-    (test-read " false" (js-value #f #f))
+  (define-syntax -test-read
+    (syntax-rules ()
+      [(_ input token)
+        (test-case (~a "read " 'token " token")
+          (check-equal?
+            (call-with-input-string input read-json-event)
+            token))]
+      [(_ input token0 token ...)
+        (test-case (~a "read " 'token0 " token starting sequence")
+        (check-equal?
+          (call-with-input-string input
+            (lambda (inp)
+              (sequence->list (in-port read-json-event inp))))
+          (list token0 token ...)))]))
 
-    (test-read "42" (js-value #f 42))
-    (test-read "-3" (js-value #f -3))
-    (test-read "3.14159" (js-value #f 3.14159))
+  (-test-read " {" (json-object-start #f))
+  (-test-read " }" (json-object-end #f))
+  (-test-read " [" (json-array-start #f))
+  (-test-read " ]" (json-array-end #f))
+  (-test-read " null" (json-value #f 'null))
+  (-test-read " :" (json-delimiter #f #\:))
+  (-test-read " ," (json-delimiter #f #\,))
+  (-test-read " true" (json-value #f #t))
+  (-test-read " false" (json-value #f #f))
 
-    (test-read " { } " (js-object-start #f) (js-object-end #f))
-    (test-read "{ \"a\": \"b\", \"c\": 42 }"
-               (js-object-start #f)
-               (js-value #f "a") (js-delim #f #\:)
-               (js-value #f "b") (js-delim #f #\,)
-               (js-value #f "c") (js-delim #f #\:)
-               (js-value #f 42)
-               (js-object-end #f)))
-  )
+  (-test-read "42" (json-value #f 42))
+  (-test-read "-3" (json-value #f -3))
+  (-test-read "3.14159" (json-value #f 3.14159))
+
+  (-test-read " { } " (json-object-start #f) (json-object-end #f))
+  (-test-read "{ \"a\": \"b\", \"c\": 42 }"
+              (json-object-start #f)
+              (json-value #f "a") (json-delimiter #f #\:)
+              (json-value #f "b") (json-delimiter #f #\,)
+              (json-value #f "c") (json-delimiter #f #\:)
+              (json-value #f 42)
+              (json-object-end #f)))
 
 ;; minimal stream and stream-cons match expanders
 ;; stream /only/ matches on first two elements and the rest
@@ -244,24 +223,24 @@
      (stream-cons a (stream* b ...))])
   (make-rename-transformer #'$tream*))
 
-;; wf-js-stream
-;; stream[js-event] -> stream[js-event]
+;; json-stream/well-formed
+;; stream[json-event] -> stream[json-event]
 ;; checks a stream for well-formedness as it is streaming
 ;; raises an exception when not well-formed
 #|
   XXX: perhaps generalize what happens with a non-well-formed stream
-    stream[js-event]
-    (some-error-state -> stream[js-event])
-      -> stream[js-event]
+    stream[json-event]
+    (some-error-state -> stream[json-event])
+      -> stream[json-event]
 
   error handler returns a stream of events to replace/splice into the
   output stream
 |#
 
-(define (wf-js-stream jst)
+(define (json-stream/well-formed jst)
   ; XXX: use source location in reporting
   (define (wf-error state expected actual)
-    (error 'wf-js-stream
+    (error 'json-stream/well-formed
            "~a incorrect state expected: ~a, got: ~a"
            state
            expected
@@ -275,11 +254,11 @@
 
   (define ((check-value k [error-tag 'value] [expects null]) v s1 s0)
     (match v
-      [(? js-value?)
+      [(? json-value?)
        (stream* v (next k s1))]
-      [(? js-array-start?)
+      [(? json-array-start?)
        (stream* v (next (check-array-start k) s1))]
-      [(? js-object-start?)
+      [(? json-object-start?)
        (stream* v (next (check-object-start k) s1))]
       [_
        (wf-error error-tag
@@ -289,7 +268,7 @@
 
   (define ((check-array-start k) v s1 s0)
     (match v
-      [(? js-array-end?)
+      [(? json-array-end?)
        (stream* v (next k s1))]
       [_ (next (check-value (check-array-delim k)
                             'array-start
@@ -298,13 +277,13 @@
 
   (define ((check-array-delim k) v s1 s0)
     (match v
-      [(js-delim _ #\,)  (next (check-array-value k) s1)]
-      [(? js-array-end?) (stream* v (next k s1))]
+      [(json-delimiter _ #\,)  (next (check-array-value k) s1)]
+      [(? json-array-end?) (stream* v (next k s1))]
       [_ (wf-error '(#\, array-end) v)]))
 
   (define ((check-array-value k) v s1 s0)
     (match v
-      [(? js-array-end?)
+      [(? json-array-end?)
        (stream* v (next k s1))]
       [_ (next (check-value (check-array-delim k)
                             'array-value
@@ -313,22 +292,22 @@
 
   (define ((check-object-start k) v s1 s0)
     (match v
-      [(? js-object-end? v)
+      [(? json-object-end? v)
        (stream* v (next k s1))]
-      [(js-value loc (? string? v))
-       (stream* (js-member-start loc v)
+      [(json-value loc (? string? v))
+       (stream* (json-member-start loc v)
                 (next (check-object-kv-delim k) s1))]
       [_ (wf-error 'object-start '(object-key object-end) v)]))
 
   (define ((check-object-key k) v s1 s0)
     (match v
-      [(js-value _ (? string?))
+      [(json-value _ (? string?))
        (stream* v (next (check-object-kv-delim k) s1))]
       [_ (wf-error 'object-key '(object-key) v)]))
 
   (define ((check-object-kv-delim k) v s1 s0)
     (match v
-      [(js-delim _ #\:)
+      [(json-delimiter _ #\:)
        (next (check-value (check-object-delim k)
                           'object-value)
              s1)]
@@ -336,10 +315,10 @@
 
   (define ((check-object-delim k) v s1 s0)
     (match v
-      [(js-object-end loc)
-       (stream* (js-member-end loc) v (next k s1))]
-      [(js-delim loc #\,)
-       (stream* (js-member-end loc) (next (check-object-key k) s1))]
+      [(json-object-end loc)
+       (stream* (json-member-end loc) v (next k s1))]
+      [(json-delimiter loc #\,)
+       (stream* (json-member-end loc) (next (check-object-key k) s1))]
       [_ (wf-error 'object-delim '(object-end #\,) v)]))
 
   (next (letrec ([k (lambda (v s1 s0) ((check-value k) v s1 s0))])
@@ -348,91 +327,91 @@
 
 
 (module+ test
-  (test-case "wf-js-stream atoms - ok"
-             (let ([s (list (js-value #f 1) (js-value #f 2))])
+  (test-case "json-stream/well-formed atoms - ok"
+             (let ([s (list (json-value #f 1) (json-value #f 2))])
                (for ([a (in-list s)]
-                     [b (in-stream (wf-js-stream s))])
+                     [b (in-stream (json-stream/well-formed s))])
                  (check-equal? a b))))
 
-  (test-case "wf-js-stream atoms - not empty stream"
-             (let ([s (list (js-value #f 1) (js-value #f 2))])
-               (check-false (stream-empty? (wf-js-stream s)))))
+  (test-case "json-stream/well-formed atoms - not empty stream"
+             (let ([s (list (json-value #f 1) (json-value #f 2))])
+               (check-false (stream-empty? (json-stream/well-formed s)))))
 
-  (test-case "wf-js-stream atoms - no delimiters"
+  (test-case "json-stream/well-formed atoms - no delimiters"
              (check-exn #px"incorrect state"
                         (lambda ()
                           (stream->list
-                           (wf-js-stream
-                            (list (js-delim #f #\,))))))
+                           (json-stream/well-formed
+                            (list (json-delimiter #f #\,))))))
              (check-exn #px"incorrect state"
                         (lambda ()
                           (stream->list
-                           (wf-js-stream
-                            (list (js-delim #f #\:)))))))
+                           (json-stream/well-formed
+                            (list (json-delimiter #f #\:)))))))
 
-  (test-case "wf-js-stream array - ok"
-             (let ([s (list (js-array-start #f)
-                            (js-value #f 42)
-                            (js-array-end #f))])
+  (test-case "json-stream/well-formed array - ok"
+             (let ([s (list (json-array-start #f)
+                            (json-value #f 42)
+                            (json-array-end #f))])
                (for ([a (in-list s)]
-                     [b (in-stream (wf-js-stream s))])
+                     [b (in-stream (json-stream/well-formed s))])
                  (check-equal? a b))))
 
-  (test-case "wf-js-stream array - ok"
-             (let ([s (list (js-array-start #f)
-                            (js-value #f 42)
-                            (js-delim #f #\,)
-                            (js-value #f 3)
-                            (js-delim #f #\,)
-                            (js-value #f 4)
-                            (js-delim #f #\,)
-                            (js-array-end #f))])
+  (test-case "json-stream/well-formed array - ok"
+             (let ([s (list (json-array-start #f)
+                            (json-value #f 42)
+                            (json-delimiter #f #\,)
+                            (json-value #f 3)
+                            (json-delimiter #f #\,)
+                            (json-value #f 4)
+                            (json-delimiter #f #\,)
+                            (json-array-end #f))])
                (for ([expected (sequence-filter (match-lambda
-                                                  [(js-delim _ #\,) #f]
+                                                  [(json-delimiter _ #\,) #f]
                                                   [_ #t])
                                                 (in-list s))]
-                     [actual (in-stream (wf-js-stream s))])
+                     [actual (in-stream (json-stream/well-formed s))])
                  (check-equal? actual expected))))
 
-  (test-case "wf-js-stream deeper array - ok"
-             (let ([s (list (js-array-start #f)
-                            (js-array-start #f)
-                            (js-value #f 42)
-                            (js-array-end #f)
-                            (js-array-end #f))])
+  (test-case "json-stream/well-formed deeper array - ok"
+             (let ([s (list (json-array-start #f)
+                            (json-array-start #f)
+                            (json-value #f 42)
+                            (json-array-end #f)
+                            (json-array-end #f))])
                (for ([a (in-list s)]
-                     [b (in-stream (wf-js-stream s))])
+                     [b (in-stream (json-stream/well-formed s))])
                  (check-equal? a b))))
 
-  (test-case "wf-js-stream object - ok"
-             (let ([in (list (js-object-start #f)
-                             (js-value #f "foo")
-                             (js-delim #f #\:)
-                             (js-value #f 42)
-                             (js-object-end #f))]
-                   [out (list (js-object-start #f)
-                              (js-member-start #f "foo")
-                              (js-value #f 42)
-                              (js-member-end #f)
-                              (js-object-end #f))])
+  (test-case "json-stream/well-formed object - ok"
+             (let ([in (list (json-object-start #f)
+                             (json-value #f "foo")
+                             (json-delimiter #f #\:)
+                             (json-value #f 42)
+                             (json-object-end #f))]
+                   [out (list (json-object-start #f)
+                              (json-member-start #f "foo")
+                              (json-value #f 42)
+                              (json-member-end #f)
+                              (json-object-end #f))])
                (for ([b (in-list out)]
-                     [a (in-stream (wf-js-stream in))])
+                     [a (in-stream (json-stream/well-formed in))])
                  (check-equal? a b))))
 
-  (test-case "wf-js-stream object - malformed kv sequence"
-             (let ([s (list (js-object-start #f)
-                            (js-value #f "foo")
-                            (js-delim #f #\:)
-                            (js-value #f 42)
-                            (js-delim #f #\,)
-                            (js-value #f "bad")
-                            (js-object-end #f))])
+  (test-case "json-stream/well-formed object - malformed kv sequence"
+             (let ([s (list (json-object-start #f)
+                            (json-value #f "foo")
+                            (json-delimiter #f #\:)
+                            (json-value #f 42)
+                            (json-delimiter #f #\,)
+                            (json-value #f "bad")
+                            (json-object-end #f))])
                (check-exn #px"kv-delim"
                           (lambda ()
-                            (stream->list (wf-js-stream s)))))))
+                            (stream->list (json-stream/well-formed s)))))))
 
 ;; XXX: flag to read a single item from the stream
-(define (make-js-stream-fold
+(define (make-json-stream-fold
          #:on-value        on-value
          #:on-array-start  on-array-start
          #:on-array-end    on-array-end
@@ -447,19 +426,19 @@
        (let ([v (stream-first s)]
              [s (stream-rest s)])
          (match v
-           [(? js-value?)
+           [(? json-value?)
             (do-fold pseed (on-value seed v) s)]
-           [(? js-array-start?)
+           [(? json-array-start?)
             (do-fold (cons seed pseed) (on-array-start seed v) s)]
-           [(? js-array-end?)
+           [(? json-array-end?)
             (do-fold (cdr pseed) (on-array-end (car pseed) seed v) s)]
-           [(? js-object-start?)
+           [(? json-object-start?)
             (do-fold (cons seed pseed) (on-object-start seed v) s)]
-           [(? js-object-end?)
+           [(? json-object-end?)
             (do-fold (cdr pseed) (on-object-end (car pseed) seed v) s)]
-           [(js-member-start _ key)
+           [(json-member-start _ key)
             (do-fold (list* seed key pseed) (on-member-start seed v) s)]
-           [(? js-member-end?)
+           [(? json-member-end?)
             (match-let ([(list parent key pseed ...) pseed])
               (do-fold pseed (on-member-end parent key seed v) s))]))]))
   (lambda (seed s)
@@ -467,80 +446,80 @@
 
 (module+ test
   (check-equal?
-   (jsexpr-fold null (list (js-value #f 42)))
+   (jsexpr-fold null (list (json-value #f 42)))
    '(42))
 
   (check-equal?
    (jsexpr-fold
-    null (list (js-value #f 42) (js-value #f 85)))
+    null (list (json-value #f 42) (json-value #f 85)))
    '(85 42))
 
   (check-equal?
    (jsexpr-fold
-    null (list (js-array-start #f)
-               (js-value #f 42)
-               (js-value #f 85)
-               (js-array-end #f)))
+    null (list (json-array-start #f)
+               (json-value #f 42)
+               (json-value #f 85)
+               (json-array-end #f)))
    '((42 85)))
 
   (check-equal?
    (jsexpr-fold
-    null (list (js-array-start #f)
-               (js-array-end #f)))
+    null (list (json-array-start #f)
+               (json-array-end #f)))
    '(()))
 
   (check-equal?
    (jsexpr-fold
-    null (list (js-object-start #f)
-               (js-object-end #f)))
+    null (list (json-object-start #f)
+               (json-object-end #f)))
    '(#hasheq()))
 
   (check-equal?
    (jsexpr-fold
-    null (list (js-object-start #f)
-               (js-member-start #f "a")
-               (js-value #f 42)
-               (js-member-end #f)
-               (js-object-end #f)))
+    null (list (json-object-start #f)
+               (json-member-start #f "a")
+               (json-value #f 42)
+               (json-member-end #f)
+               (json-object-end #f)))
    '(#hasheq([a . 42]))))
 
-;; js-stream->jsexpr
-;; stream[js-event] -> <jsexpr, stream[js-event]>
+;; json-stream->jsexpr
+;; stream[json-event] -> <jsexpr, stream[json-event]>
 ;; expects a well formed stream of events
-(define (js-stream->jsexpr s)
+(define (json-stream->jsexpr s)
   (match s
-    [(stream* (js-value _ v) s) (values v s)]
-    [(stream* (js-array-start _) s)
-     (js-stream->jsexpr-list s)]
-    [(stream* (js-object-start _) s)
-     (js-stream->jsexpr-hash (hasheq) s)]))
+    [(stream* (json-value _ v) s) (values v s)]
+    [(stream* (json-array-start _) s)
+     (json-stream->jsexpr-list s)]
+    [(stream* (json-object-start _) s)
+     (json-stream->jsexpr-hash (hasheq) s)]))
 
-;; js-stream->jsexpr-list
-;; stream[js-event] -> <jslist, stream[js-event]>
-(define (js-stream->jsexpr-list s)
+;; json-stream->jsexpr-list
+;; stream[json-event] -> <jslist, stream[json-event]>
+(define (json-stream->jsexpr-list s)
   (match s
-    [(stream* (js-array-end _) s) (values null s)]
+    [(stream* (json-array-end _) s) (values null s)]
     [_
-     (let*-values ([(head s) (js-stream->jsexpr s)]
-                   [(tail s) (js-stream->jsexpr-list s)])
+     (let*-values ([(head s) (json-stream->jsexpr s)]
+                   [(tail s) (json-stream->jsexpr-list s)])
        (values (cons head tail) s))]))
 
-;; js-stream->jsexpr-hash
-;; hash stream[js-event] -> <jshash, stream[js-event]>
-(define (js-stream->jsexpr-hash acc s)
+;; json-stream->jsexpr-hash
+;; hash stream[json-event] -> <jshash, stream[json-event]>
+(define (json-stream->jsexpr-hash acc s)
   (match s
-    [(stream* (js-object-end _) s) (values acc s)]
-    [(stream* (js-member-end _) s) (js-stream->jsexpr-hash acc s)]
-    [(stream* (js-member-start _ k) s)
-     (let-values ([(v s) (js-stream->jsexpr s)]
+    [(stream* (json-object-end _) s) (values acc s)]
+    [(stream* (json-member-end _) s) (json-stream->jsexpr-hash acc s)]
+    [(stream* (json-member-start _ k) s)
+     (let-values ([(v s) (json-stream->jsexpr s)]
                   [(k) (string->symbol k)])
-       (js-stream->jsexpr-hash (hash-set acc k v) s))]))
+       (json-stream->jsexpr-hash (hash-set acc k v) s))]))
 
 (define jsexpr-fold
-  (make-js-stream-fold
+  (make-json-stream-fold
    #:on-value
    (lambda (seed v)
-     (cons (js-value-v v) seed))
+     (cons (json-value-v v) seed))
    #:on-array-start
    (lambda (seed v) null)
    #:on-array-end
@@ -560,137 +539,136 @@
 
 
 (module+ test
-  (test-case "js-stream->jsexpr one value"
-             (let-values ([(v s) (js-stream->jsexpr
-                                  (list (js-value #f 'null)))])
+  (test-case "json-stream->jsexpr one value"
+             (let-values ([(v s) (json-stream->jsexpr
+                                  (list (json-value #f 'null)))])
                (check-eq? v 'null)
                (check-true (stream-empty? s))))
 
-  (test-case "js-stream->jsexpr two value"
-             (let ([e* (list (js-value #f 'null) (js-value #f 42))])
-               (let-values ([(v s) (js-stream->jsexpr e*)])
+  (test-case "json-stream->jsexpr two value"
+             (let ([e* (list (json-value #f 'null) (json-value #f 42))])
+               (let-values ([(v s) (json-stream->jsexpr e*)])
                  (check-eq? v 'null)
                  (check-false (stream-empty? s))
-                 (check-equal? (stream-first s) (js-value #f 42)))))
+                 (check-equal? (stream-first s) (json-value #f 42)))))
 
-  (test-case "js-stream->jsexpr array"
-             (let ([e* (list (js-array-start #f)
-                             (js-value #f 1)
-                             (js-value #f 2)
-                             (js-value #f 3)
-                             (js-array-end #f))])
-               (let-values ([(v s) (js-stream->jsexpr e*)])
+  (test-case "json-stream->jsexpr array"
+             (let ([e* (list (json-array-start #f)
+                             (json-value #f 1)
+                             (json-value #f 2)
+                             (json-value #f 3)
+                             (json-array-end #f))])
+               (let-values ([(v s) (json-stream->jsexpr e*)])
                  (check-equal? v (list 1 2 3))
                  (check-true (stream-empty? s)))))
 
-  (test-case "js-stream->jsexpr hash"
-             (let ([e* (list (js-object-start #f)
-                             (js-member-start #f "a")
-                             (js-array-start #f)
-                             (js-value #f 1)
-                             (js-value #f 2)
-                             (js-value #f 3)
-                             (js-array-end #f)
-                             (js-member-end #f)
-                             (js-member-start #f "b")
-                             (js-array-start #f)
-                             (js-value #f 4)
-                             (js-value #f 5)
-                             (js-value #f 6)
-                             (js-array-end #f)
-                             (js-member-end #f)
-                             (js-object-end #f))])
-               (let-values ([(v s) (js-stream->jsexpr e*)])
+  (test-case "json-stream->jsexpr hash"
+             (let ([e* (list (json-object-start #f)
+                             (json-member-start #f "a")
+                             (json-array-start #f)
+                             (json-value #f 1)
+                             (json-value #f 2)
+                             (json-value #f 3)
+                             (json-array-end #f)
+                             (json-member-end #f)
+                             (json-member-start #f "b")
+                             (json-array-start #f)
+                             (json-value #f 4)
+                             (json-value #f 5)
+                             (json-value #f 6)
+                             (json-array-end #f)
+                             (json-member-end #f)
+                             (json-object-end #f))])
+               (let-values ([(v s) (json-stream->jsexpr e*)])
                  (check-equal? v (hasheq 'a (list 1 2 3)
                                          'b (list 4 5 6)))
-                 (check-true (stream-empty? s)))))
-  )
+                 (check-true (stream-empty? s))))))
 
-;; jsexpr->js-stream
-;; jsexpr -> stream[js-event]
-(define (jsexpr->js-stream e)
+;; jsexpr->json-stream
+;; jsexpr -> stream[json-event]
+(define (jsexpr->json-stream e)
   (sequence->stream
    (in-generator (jsexpr-walk e yield))))
 
 ;; jsexpr-walk
-;; jsexpr (js-event -> void) -> void
+;; jsexpr (json-event -> void) -> void
 (define (jsexpr-walk e callback)
   (match e
     [(or (? number?)
          (? string?)
          (? boolean?))
-     (callback (js-value #f e))]
+     (callback (json-value #f e))]
 
     ['null
-     (callback (js-value #f 'null))]
+     (callback (json-value #f 'null))]
 
     [(hash-table (k* v*) ...)
-     (callback (js-object-start #f))
+     (callback (json-object-start #f))
      (for ([k (in-list k*)]
            [v (in-list v*)])
-       (callback (js-member-start #f (symbol->string k)))
+       (callback (json-member-start #f (symbol->string k)))
        (jsexpr-walk v callback)
-       (callback (js-member-end #f)))
-     (callback (js-object-end #f))]
+       (callback (json-member-end #f)))
+     (callback (json-object-end #f))]
 
     [(list e* ...)
-     (callback (js-array-start #f))
+     (callback (json-array-start #f))
      (for ([e (in-list e*)])
        (jsexpr-walk e callback))
-     (callback (js-array-end #f))]))
+     (callback (json-array-end #f))]))
 
 (module+ test
   (let ([o (hash 'a '(1 2 3 4 null) 'b "c")])
-    (test-equal? "jsexpr->js-stream"
-                 (stream->list (jsexpr->js-stream o))
-                 (list (js-object-start #f)
-                       (js-member-start #f "a")
-                       (js-array-start #f)
-                       (js-value #f 1)
-                       (js-value #f 2)
-                       (js-value #f 3)
-                       (js-value #f 4)
-                       (js-value #f 'null)
-                       (js-array-end #f)
-                       (js-member-end #f)
-                       (js-member-start #f "b")
-                       (js-value #f "c")
-                       (js-member-end #f)
-                       (js-object-end #f)))))
+    (test-equal? "jsexpr->json-stream"
+                 (stream->list (jsexpr->json-stream o))
+                 (list (json-object-start #f)
+                       (json-member-start #f "a")
+                       (json-array-start #f)
+                       (json-value #f 1)
+                       (json-value #f 2)
+                       (json-value #f 3)
+                       (json-value #f 4)
+                       (json-value #f 'null)
+                       (json-array-end #f)
+                       (json-member-end #f)
+                       (json-member-start #f "b")
+                       (json-value #f "c")
+                       (json-member-end #f)
+                       (json-object-end #f)))))
 
 
 (provide
  (contract-out
-  (struct js-value
+  (struct json-value
     [(location source-location?)
      (v (or/c number? string?))])
-  (struct js-delim
+  (struct json-delimiter
     [(location source-location?)
      (tok (or/c #\: #\,))])
-  (struct js-object-start [(location source-location?)])
-  (struct js-object-end   [(location source-location?)])
-  (struct js-array-start  [(location source-location?)])
-  (struct js-array-end    [(location source-location?)])
-  (struct js-member-start
+  (struct json-object-start [(location source-location?)])
+  (struct json-object-end   [(location source-location?)])
+  (struct json-array-start  [(location source-location?)])
+  (struct json-array-end    [(location source-location?)])
+  (struct json-member-start
     [(location source-location?)
      (name string?)])
-  (struct js-member-end
+  (struct json-member-end
     [(location source-location?)])
 
-  (js-event? (-> any/c boolean?))
-  (read-js-event
-   (-> input-port? (or/c eof-object? js-event?)))
-  (port->js-stream
-   (-> input-port? (stream/c js-event?)))
-  (wf-js-stream
-   (-> (stream/c js-event?) (stream/c js-event?)))
+  (json-event? (-> any/c boolean?))
+  (read-json-event
+   (-> input-port? (or/c eof-object? json-event?)))
+  (port->json-stream
+   (-> input-port? (stream/c json-event?)))
+  (json-stream/well-formed
+   (-> (stream/c json-event?) (stream/c json-event?)))
 
-  (make-js-stream-fold
-   (-> #:on-value        (-> any/c js-value? any)
-       #:on-array-start  (-> any/c js-array-start? any)
-       #:on-array-end    (-> any/c any/c js-array-end? any)
-       #:on-object-start (-> any/c js-object-start? any)
-       #:on-object-end   (-> any/c any/c js-object-end? any)
-       #:on-member-start (-> any/c js-member-start? any)
-       #:on-member-end   (-> any/c string? any/c js-member-end? any)
-       (-> any/c (stream/c js-event?) any)))))
+  (make-json-stream-fold
+   (-> #:on-value        (-> any/c json-value? any)
+       #:on-array-start  (-> any/c json-array-start? any)
+       #:on-array-end    (-> any/c any/c json-array-end? any)
+       #:on-object-start (-> any/c json-object-start? any)
+       #:on-object-end   (-> any/c any/c json-object-end? any)
+       #:on-member-start (-> any/c json-member-start? any)
+       #:on-member-end   (-> any/c string? any/c json-member-end? any)
+       (-> any/c (stream/c json-event?) any)))))
