@@ -37,6 +37,7 @@
 
 (define json-value-string? (make-json-value-pred string?))
 (define json-value-number? (make-json-value-pred number?))
+(define json-value-boolean? (make-json-value-pred boolean?))
 
 (define ($peek-char inp)
   (values (peek-char inp) inp))
@@ -104,7 +105,7 @@
                 (~a "hello " (string #\") "world" (string #\"))))
 
 (define (port->source-location port)
-  (and (port-count-lines-enabled)
+  (and (port-counts-lines? port)
        (let-values ([(line col pos) (port-next-location port)])
          (vector (object-name port) line col pos 0))))
 
@@ -114,7 +115,7 @@
   (let* ([start-loc (port->source-location inp)]
          [source-location
           (lambda ()
-            (and (port-count-lines-enabled)
+            (and (port-counts-lines? inp)
                  (build-source-location-vector
                   start-loc (port->source-location inp))))])
     (match inp
@@ -641,7 +642,7 @@
  (contract-out
   (struct json-value
     [(location source-location?)
-     (v (or/c number? string?))])
+     (v (or/c number? string? boolean?))])
   (struct json-delimiter
     [(location source-location?)
      (tok (or/c #\: #\,))])
@@ -655,7 +656,11 @@
   (struct json-member-end
     [(location source-location?)])
 
+  (json-value-string? (-> any/c boolean?))
+  (json-value-number? (-> any/c boolean?))
+  (json-value-boolean? (-> any/c boolean?))
   (json-event? (-> any/c boolean?))
+  (json-event-location (-> json-event? source-location?))
   (read-json-event
    (-> input-port? (or/c eof-object? json-event?)))
   (port->json-stream
