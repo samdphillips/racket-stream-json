@@ -642,7 +642,7 @@
  (contract-out
   (struct json-value
     [(location source-location?)
-     (v (or/c number? string? boolean?))])
+     (v (or/c number? string? boolean? 'null))])
   (struct json-delimiter
     [(location source-location?)
      (tok (or/c #\: #\,))])
