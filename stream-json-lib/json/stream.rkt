@@ -77,6 +77,7 @@
 ;; read-json-string
 ;; input-port -> string
 ;; XXX: add rest of escapes
+;; XXX: json specific exn
 (define (read-json-string inp)
   (call-with-output-string
    (lambda (outp)
@@ -85,10 +86,14 @@
          (match inp
            [(peek #\") (done)]
            [(peek "\\\"") (write-char #\" outp)]
+           [(peek "\\n") (write-char #\newline outp)]
            [(peek "\\\\") (write-char #\\ outp)]
            [(peek #px"^[^\\\\\"]+" s) (write-string s outp)]
-           [(app (lambda (inp) (peek-string 5 0 inp)) s)
-            (error 'read-json-string "got: ~s" s)])
+           [(app (lambda (inp) (peek-string 10 0 inp)) buf)
+            (error 'read-json-string
+                   "at ~a, got: ~s"
+                   (port->source-location inp)
+                   buf)])
          (read-piece))
        (read-piece)))))
 
