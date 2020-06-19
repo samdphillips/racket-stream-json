@@ -624,24 +624,11 @@
      (callback (json-array-end #f))]))
 
 (module+ test
-  (let ([o (hash 'a '(1 2 3 4 null) 'b "c")])
+  (let ([obj (hasheq 'a '(1 2 3 4 null) 'b "c")])
     (test-equal? "jsexpr->json-stream"
-                 (stream->list (jsexpr->json-stream o))
-                 (list (json-object-start #f)
-                       (json-member-start #f "a")
-                       (json-array-start #f)
-                       (json-value #f 1)
-                       (json-value #f 2)
-                       (json-value #f 3)
-                       (json-value #f 4)
-                       (json-value #f 'null)
-                       (json-array-end #f)
-                       (json-member-end #f)
-                       (json-member-start #f "b")
-                       (json-value #f "c")
-                       (json-member-end #f)
-                       (json-object-end #f)))))
-
+                 (let-values ([(val s) (json-stream->jsexpr (jsexpr->json-stream obj))])
+                   val)
+                 obj)))
 
 (provide
  (contract-out
