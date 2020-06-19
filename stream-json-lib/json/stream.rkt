@@ -4,13 +4,16 @@
          racket/generator
          racket/match
          racket/port
-         (rename-in racket/stream
-                    [stream* $tream*]
-                    [stream-cons $tream-cons])
          syntax/srcloc
 
          (for-syntax racket/base
-                     syntax/parse))
+                     syntax/parse)
+
+         json/stream/private/port-match
+         json/stream/private/stream-match)
+
+
+
 
 (module+ test
   (require rackunit
@@ -38,41 +41,6 @@
 (define json-value-string? (make-json-value-pred string?))
 (define json-value-number? (make-json-value-pred number?))
 (define json-value-boolean? (make-json-value-pred boolean?))
-
-(define ($peek-char inp)
-  (values (peek-char inp) inp))
-
-(define (($peek-string count) inp)
-  (values (peek-string count 0 inp) inp))
-
-(define (($read-string count) inp)
-  (read-string count inp))
-
-(define (($regexp-try-match pat) inp)
-  (values (regexp-try-match pat inp) #f))
-
-(begin-for-syntax
-  (define-syntax-class regexp
-    #:description "regular expression"
-    (pattern x #:when (regexp? (syntax-e #'x)))))
-
-(define-match-expander peek
-  (lambda (stx)
-    (let ([$peek (lambda (pat peek read)
-                   #`(app #,peek #,pat (app #,read _)))])
-      (syntax-parse stx
-        [(peek spat:string)
-         #:with slen (string-length (syntax-e #'spat))
-         ($peek #'spat #'($peek-string 'slen) #'($read-string 'slen))]
-
-        [(peek cpat:char)
-         ($peek #'cpat #'$peek-char #'read-char)]
-
-        [(peek rxpat:regexp pat ...)
-         ($peek #'(and (not #f)
-                       (list-rest (app bytes->string/utf-8 pat) ... _))
-                #'($regexp-try-match rxpat)
-                #'values)]))))
 
 ;; read-json-string
 ;; input-port -> string
@@ -206,28 +174,6 @@
               (json-value #f "c") (json-delimiter #f #\:)
               (json-value #f 42)
               (json-object-end #f)))
-
-;; minimal stream and stream-cons match expanders
-;; stream /only/ matches on first two elements and the rest
-
-;; XXX: maybe just generalize stream* (in terms of stream-cons)
-(define-match-expander stream-cons
-  (syntax-rules ()
-    [(_ a b)
-     (? stream?
-        (not (? stream-empty?))
-        (app (lambda (s)
-               (values (stream-first s)
-                       (stream-rest s)))
-             a b))])
-  (make-rename-transformer #'$tream-cons))
-
-(define-match-expander stream*
-  (syntax-rules ()
-    [(_ a) a]
-    [(_ a b ...)
-     (stream-cons a (stream* b ...))])
-  (make-rename-transformer #'$tream*))
 
 ;; json-stream/well-formed
 ;; stream[json-event] -> stream[json-event]
