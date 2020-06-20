@@ -56,7 +56,7 @@
            [(peek "\\\"") (write-char #\" outp)]
            [(peek "\\n") (write-char #\newline outp)]
            [(peek "\\\\") (write-char #\\ outp)]
-           [(peek #px"^[^\\\\\"]+" s) (write-string s outp)]
+           [(peek #px"^[^\\\\\"]+" s) (write-bytes s outp)]
            [(app (lambda (inp) (peek-string 10 0 inp)) buf)
             (error 'read-json-string
                    "at ~a, got: ~s"
@@ -97,13 +97,13 @@
       [(peek #px"^\\s+")
        (read-json-event inp)]
 
-      [(peek "null")
+      [(peek #"null")
        (json-value (source-location) 'null)]
 
-      [(peek "true")
+      [(peek #"true")
        (json-value (source-location) #t)]
 
-      [(peek "false")
+      [(peek #"false")
        (json-value (source-location) #f)]
 
       [(peek #\{)
@@ -122,13 +122,15 @@
 
       [(peek #\,) (json-delimiter (source-location) #\,)]
 
-      ;; XXX: understand exponential notation
-      [(peek #px"^-?\\d+(\\.\\d+)?" s)
-       (json-value (source-location) (string->number s))]
-
       [(peek #\")
        (let ([s (read-json-string inp)])
-         (json-value (source-location) s))])))
+         (json-value (source-location) s))]
+
+      ;; XXX: understand exponential notation
+      [(peek #px"^-?\\d+(\\.\\d+)?" s)
+       (json-value (source-location)
+                   (string->number
+                     (bytes->string/utf-8 s)))])))
 
 (define (port->json-stream inp #:well-formed? [wf? #f])
   (let ([wf (if wf? json-stream/well-formed values)])
