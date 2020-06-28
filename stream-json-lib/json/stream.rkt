@@ -39,49 +39,78 @@
 (define json-value-number? (make-json-value-pred number?))
 (define json-value-boolean? (make-json-value-pred boolean?))
 
+(struct string-buf (store pos) #:mutable)
+
+(define (make-string-buf)
+  (string-buf (make-string 16) 0))
+
+(define (string-buf->string sbuf)
+  (match-define (string-buf store pos) sbuf)
+  (substring store 0 pos))
+
+(define (string-buf-full? sbuf)
+  (= (string-buf-pos sbuf)
+     (string-length
+       (string-buf-store sbuf))))
+
+(define (string-buf-grow! sbuf)
+  (define pos (string-buf-pos sbuf))
+  (define new-store (make-string (* 2 pos)))
+  (string-copy! new-store 0 (string-buf-store sbuf) 0 pos)
+  (set-string-buf-store! sbuf new-store))
+
+(define (string-buf-write-char! sbuf ch)
+  (when (string-buf-full? sbuf)
+    (string-buf-grow! sbuf))
+  (define pos (string-buf-pos sbuf))
+  (string-set! (string-buf-store sbuf) pos ch)
+  (set-string-buf-pos! sbuf (add1 pos)))
+
+(define (string-buf-write-byte! sbuf c)
+  (string-buf-write-char! sbuf (integer->char c)))
+
 ;; read-json-string
 ;; input-port -> string
 ;; XXX: add rest of escapes
 ;; XXX: json specific exn
 (define (read-json-string inp)
-  (call-with-output-string
-   (lambda (outp)
-     (define (decode-escape)
-       (match (read-char inp)
-         [#\\ (write-char #\\ outp)]
-         [#\n (write-char #\newline outp)]
-         [#\" (write-char #\" outp)]
-         [_   (error 'read-json-string "unknown escape")])
-       (read-piece))
-     (define (decode-utf8 c)
-       ; XXX: parameter for permissive decoding
-       (decode-utf8-loop 0 1 (make-bytes 6 c) (bytes-open-converter "UTF-8" "UTF-8")))
-     (define (decode-utf8-loop start end buf conv)
-       (define-values (wamt ramt state) (bytes-convert conv buf start end buf 0 6))
-       (match state
-         ['complete
-          (write-char (bytes-utf-8-ref buf 0) outp)
-          (read-piece)]
-         ['error
-          ; XXX:
-          (error 'read-json-string "utf8 decode error")]
-         ['aborts
-          (define c (read-byte inp))
-          (cond
-            [(eof-object? c) (error 'read-json-string "eof in string")]
-            [else
-              (bytes-set! buf end c)
-              (decode-utf8-loop (+ start ramt) (add1 end) buf conv)])]))
-     (define (seven-bit? c) (< c 128))
-     (define (read-piece)
-       (match (read-byte inp)
-         [(? eof-object?)          (error 'read-json-string "eof in string")]
-         [(== (char->integer #\")) (void)]
-         [(== (char->integer #\\)) (decode-escape)]
-         [(? seven-bit? c)         (write-byte c outp) (read-piece)]
-         [c                        (decode-utf8 c)]))
+  (define buf (make-string-buf))
+  (define (decode-escape)
+    (match (read-char inp)
+      [#\\ (string-buf-write-char! buf #\\)]
+      [#\n (string-buf-write-char! buf #\newline)]
+      [#\" (string-buf-write-char! buf #\")]
+      [_   (error 'read-json-string "unknown escape")])
+    (read-piece))
+  (define (decode-utf8 c)
+    ; XXX: parameter for permissive decoding
+    (decode-utf8-loop 0 1 (make-bytes 6 c) (bytes-open-converter "UTF-8" "UTF-8")))
+  (define (decode-utf8-loop start end buf conv)
+    (define-values (wamt ramt state) (bytes-convert conv buf start end buf 0 6))
+    (match state
+      ['complete
+       (string-buf-write-char! buf (bytes-utf-8-ref buf 0))
+       (read-piece)]
+      ['error
+       ; XXX:
+       (error 'read-json-string "utf8 decode error")]
+      ['aborts
+       (define c (read-byte inp))
+       (cond
+         [(eof-object? c) (error 'read-json-string "eof in string")]
+         [else
+           (bytes-set! buf end c)
+           (decode-utf8-loop (+ start ramt) (add1 end) buf conv)])]))
+  (define (seven-bit? c) (< c 128))
+  (define (read-piece)
+    (match (read-byte inp)
+      [(? eof-object?)          (error 'read-json-string "eof in string")]
+      [(== (char->integer #\")) (string-buf->string buf)]
+      [(== (char->integer #\\)) (decode-escape)]
+      [(? seven-bit? c)         (string-buf-write-byte! buf c) (read-piece)]
+      [c                        (decode-utf8 c)]))
 
-       (read-piece))))
+    (read-piece))
 
 (module+ test
   (define-syntax -test-string
