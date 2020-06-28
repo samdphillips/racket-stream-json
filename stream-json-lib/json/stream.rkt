@@ -12,9 +12,6 @@
          json/stream/private/port-match
          json/stream/private/stream-match)
 
-
-
-
 (module+ test
   (require rackunit
            racket/format
@@ -49,21 +46,42 @@
 (define (read-json-string inp)
   (call-with-output-string
    (lambda (outp)
-     (let/ec done
-       (define (read-piece)
-         (match inp
-           [(peek #\") (done)]
-           [(peek "\\\"") (write-char #\" outp)]
-           [(peek "\\n") (write-char #\newline outp)]
-           [(peek "\\\\") (write-char #\\ outp)]
-           [(peek #px"^[^\\\\\"]+" s) (write-bytes s outp)]
-           [(app (lambda (inp) (peek-string 10 0 inp)) buf)
-            (error 'read-json-string
-                   "at ~a, got: ~s"
-                   (port->source-location inp)
-                   buf)])
-         (read-piece))
-       (read-piece)))))
+     (define (decode-escape)
+       (match (read-char inp)
+         [#\\ (write-char #\\ outp)]
+         [#\n (write-char #\newline outp)]
+         [#\" (write-char #\" outp)]
+         [_   (error 'read-json-string "unknown escape")])
+       (read-piece))
+     (define (decode-utf8 c)
+       ; XXX: parameter for permissive decoding
+       (decode-utf8-loop 0 1 (make-bytes 6 c) (bytes-open-converter "UTF-8" "UTF-8")))
+     (define (decode-utf8-loop start end buf conv)
+       (define-values (wamt ramt state) (bytes-convert conv buf start end buf 0 6))
+       (match state
+         ['complete
+          (write-char (bytes-utf-8-ref buf 0) outp)
+          (read-piece)]
+         ['error
+          ; XXX:
+          (error 'read-json-string "utf8 decode error")]
+         ['aborts
+          (define c (read-byte inp))
+          (cond
+            [(eof-object? c) (error 'read-json-string "eof in string")]
+            [else
+              (bytes-set! buf end c)
+              (decode-utf8-loop (+ start ramt) (add1 end) buf conv)])]))
+     (define (seven-bit? c) (< c 128))
+     (define (read-piece)
+       (match (read-byte inp)
+         [(? eof-object?)          (error 'read-json-string "eof in string")]
+         [(== (char->integer #\")) (void)]
+         [(== (char->integer #\\)) (decode-escape)]
+         [(? seven-bit? c)         (write-byte c outp) (read-piece)]
+         [c                        (decode-utf8 c)]))
+
+       (read-piece))))
 
 (module+ test
   (define-syntax -test-string
@@ -82,51 +100,77 @@
        (let-values ([(line col pos) (port-next-location port)])
          (vector (object-name port) line col pos 0))))
 
+(define (skip-whitespace inp)
+  (define c (peek-char inp))
+  (when (and (char? c) (char-whitespace? c))
+    (read-char inp)
+    (skip-whitespace inp)))
+
+(define (read-literal bs inp)
+  (define rs (read-bytes (bytes-length bs) inp))
+  (unless (bytes=? bs rs)
+    (error 'read-json-event "expected literal ~a got: ~a" bs rs)))
+
+(define numeric-char-byte?
+  (let ([ZERO (char->integer #\0)]
+        [NINE (char->integer #\9)])
+    (lambda (c)
+      (and (>= c ZERO) (<= c NINE)))))
+
 ;; read-json-event
 ;; input-port -> (U json-event eof-object)
 (define (read-json-event inp)
+  (skip-whitespace inp)
   (let* ([start-loc (port->source-location inp)]
          [source-location
           (lambda ()
             (and (port-counts-lines? inp)
                  (build-source-location-vector
                   start-loc (port->source-location inp))))])
-    (match inp
-      [(app peek-char (? eof-object? v)) v]
+    (match (read-byte inp)
+      [(? eof-object? v) v]
 
-      [(peek #px"^\\s+")
-       (read-json-event inp)]
-
-      [(peek #"null")
+      [(== (char->integer #\n))
+       (read-literal #"ull" inp)
        (json-value (source-location) 'null)]
 
-      [(peek #"true")
+      [(== (char->integer #\t))
+       (read-literal #"rue" inp)
        (json-value (source-location) #t)]
 
-      [(peek #"false")
+      [(== (char->integer #\f))
+       (read-literal #"alse" inp)
        (json-value (source-location) #f)]
 
-      [(peek #\{)
+      [(== (char->integer #\{))
        (json-object-start (source-location))]
 
-      [(peek #\})
+      [(== (char->integer #\}))
        (json-object-end (source-location))]
 
-      [(peek #\[)
+      [(== (char->integer #\[))
        (json-array-start (source-location))]
 
-      [(peek #\])
+      [(== (char->integer #\]))
        (json-array-end (source-location))]
 
-      [(peek #\:) (json-delimiter (source-location) #\:)]
+      [(== (char->integer #\:))
+       (json-delimiter (source-location) #\:)]
 
-      [(peek #\,) (json-delimiter (source-location) #\,)]
+      [(== (char->integer #\,))
+       (json-delimiter (source-location) #\,)]
 
-      [(peek #\")
+      [(== (char->integer #\"))
        (let ([s (read-json-string inp)])
          (json-value (source-location) s))]
 
+      [(? numeric-char-byte?  n)
+       (json-value (source-location)
+                   (- n (char->integer #\0)))]
+
+      ;; XXX: actually re-implement this ...
       ;; XXX: understand exponential notation
+      #;
       [(peek #px"^-?\\d+(\\.\\d+)?" s)
        (json-value (source-location)
                    (string->number
