@@ -68,10 +68,16 @@
                       (call-with-input-file test-file-path parse-fn))))))))
 
 (define (test-file->list fname)
-  (call-with-input-file (build-path test-files-path fname)
+  (define p (build-path test-files-path fname))
+  (writeln (file->bytes p))
+  (call-with-input-file p
     (lambda (inp)
       (stream->list
         (port->json-stream inp #:well-formed? #t)))))
+
+(module* main #f
+  (test-file->list
+    (vector-ref (current-command-line-arguments) 0)))
 
 (module* test #f
   (require racket/match

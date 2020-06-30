@@ -81,7 +81,7 @@
       [(? seven-bit? c)         (string-buf-write-byte! buf c) (read-piece)]
       [c                        (decode-utf8 c)]))
 
-    (read-piece))
+  (read-piece))
 
 (module+ test
   (define-syntax -test-string
@@ -105,8 +105,11 @@
 
 (define (read-zero inp pos?)
   (match (peek-byte inp)
-    [(or (? eof-object?) (? ws-byte?)) 0]
-    [(char-byte #\.) (read-number inp pos? 0)]))
+    [(or (char-byte #\.)
+         (char-byte #\e)
+         (char-byte #\E))
+     (read-number inp pos? 0)]
+    [_ 0]))
 
 (define (read-negative-number inp)
   (match (peek-byte inp)
@@ -125,31 +128,35 @@
     (exactness (* sign num (expt 10 exp))))
   (define (read-integer n)
     (match (peek1)
-      [(or (? eof-object?) (? ws-byte?))
-       (build-number n 0 #f)]
       [(? digit-byte?)
        (read-integer (+ (* 10 n) (byte->number (read1))))]
       [(or (char-byte #\E) (char-byte #\e))
        (read1)
-       (read-expt n 0 0)]
+       (read-expt n 0)]
       [(char-byte #\.)
        (read1)
-       (read-fraction n 0)]))
+       (read-fraction n 0)]
+      [_ (build-number n 0 #f)]))
   (define (read-fraction n p)
     (match (peek1)
-      [(or (? eof-object?) (? ws-byte?))
-       (build-number n p #t)]
       [(? digit-byte?)
        (read-fraction (+ (* 10 n) (byte->number (read1))) (sub1 p))]
       [(or (char-byte #\E) (char-byte #\e))
        (read1)
-       (read-expt n p 0)]))
-  (define (read-expt n p e)
+       (read-expt n p)]
+      [_ (build-number n p #t)]))
+  (define (read-expt n p)
+    (define s
+      (match (peek1)
+        [(char-byte #\+) (read1)  1]
+        [(char-byte #\-) (read1) -1]
+        [_                        1]))
+    (read-expt* n p s 0))
+  (define (read-expt* n p s e)
     (match (peek1)
-      [(or (? eof-object?) (? ws-byte?))
-       (build-number n (+ p e) #t)]
       [(? digit-byte?)
-       (read-expt n p (+ (* 10 e) (byte->number (read1))))]))
+       (read-expt* n p s (+ (* 10 e) (byte->number (read1))))]
+      [_ (build-number n (+ p (* s e)) #t)]))
   (read-integer n))
 
 (module+ test
@@ -184,6 +191,7 @@
        (let-values ([(line col pos) (port-next-location port)])
          (vector (object-name port) line col pos 0))))
 
+; XXX: use ws-byte?
 (define (skip-whitespace inp)
   (define c (peek-char inp))
   (when (and (char? c) (char-whitespace? c))
@@ -195,12 +203,6 @@
   (unless (bytes=? bs rs)
     (error 'read-json-event "expected literal ~a got: ~a" bs rs)))
 
-(define numeric-char-byte?
-  (let ([ZERO (char->integer #\0)]
-        [NINE (char->integer #\9)])
-    (lambda (c)
-      (and (>= c ZERO) (<= c NINE)))))
-
 ;; read-json-event
 ;; input-port -> (U json-event eof-object)
 (define (read-json-event inp)
@@ -211,56 +213,54 @@
             (and (port-counts-lines? inp)
                  (build-source-location-vector
                   start-loc (port->source-location inp))))])
-    ;; XXX: switch to peek-byte
     ;; XXX: make codepoints constants (or match macro?)
-    (match (read-byte inp)
+    (match (peek-byte inp)
       [(? eof-object? v) v]
 
-      [(== (char->integer #\n))
-       (read-literal #"ull" inp)
+      [(char-byte #\n)
+       (read-literal #"null" inp)
        (json-value (source-location) 'null)]
 
-      [(== (char->integer #\t))
-       (read-literal #"rue" inp)
+      [(char-byte #\t)
+       (read-literal #"true" inp)
        (json-value (source-location) #t)]
 
-      [(== (char->integer #\f))
-       (read-literal #"alse" inp)
+      [(char-byte #\f)
+       (read-literal #"false" inp)
        (json-value (source-location) #f)]
 
-      [(== (char->integer #\{))
+      [(char-byte #\{)
+       (read-byte inp)
        (json-object-start (source-location))]
 
-      [(== (char->integer #\}))
+      [(char-byte #\})
+       (read-byte inp)
        (json-object-end (source-location))]
 
-      [(== (char->integer #\[))
+      [(char-byte #\[)
+       (read-byte inp)
        (json-array-start (source-location))]
 
-      [(== (char->integer #\]))
+      [(char-byte #\])
+       (read-byte inp)
        (json-array-end (source-location))]
 
-      [(== (char->integer #\:))
+      [(char-byte #\:)
+       (read-byte inp)
        (json-delimiter (source-location) #\:)]
 
-      [(== (char->integer #\,))
+      [(char-byte #\,)
+       (read-byte inp)
        (json-delimiter (source-location) #\,)]
 
       [(== (char->integer #\"))
+       (read-byte inp)
        (let ([s (read-json-string inp)])
          (json-value (source-location) s))]
 
-      [(? numeric-char-byte?  n)
-       (json-value (source-location)
-                   (- n (char->integer #\0)))]
-
-      ;; XXX: actually re-implement this ...
-      ;; XXX: understand exponential notation
-      #;
-      [(peek #px"^-?\\d+(\\.\\d+)?" s)
-       (json-value (source-location)
-                   (string->number
-                     (bytes->string/utf-8 s)))])))
+      [(or (? digit-byte?) (char-byte #\-))
+       (let ([n (read-json-number inp)])
+         (json-value (source-location) n))])))
 
 (module+ test
   (define-syntax -test-read
