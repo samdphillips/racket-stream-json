@@ -71,8 +71,7 @@
   (call-with-input-file (build-path test-files-path fname)
     (lambda (inp)
       (stream->list
-        (json-stream/well-formed
-          (port->json-stream inp))))))
+        (port->json-stream inp #:well-formed? #t)))))
 
 (module* test #f
   (require racket/match
@@ -80,8 +79,8 @@
            json)
 
   (define (read-all-json-stream inp)
-    (define s (json-stream/well-formed
-                (port->json-stream inp)))
+    (define s
+      (port->json-stream inp #:well-formed? #t))
     (define (read-all s)
       (unless (stream-empty? s)
         (read-all (stream-rest s))))
