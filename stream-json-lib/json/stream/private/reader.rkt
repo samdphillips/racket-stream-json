@@ -5,6 +5,7 @@
 (require racket/match
          racket/port
          syntax/srcloc
+         (for-syntax racket/base)
 
          json/stream/private/stream-match
          json/stream/private/string-buf
@@ -14,6 +15,30 @@
   (require rackunit
            racket/format
            racket/sequence))
+
+(define-match-expander char-byte
+  (lambda (stx)
+    (syntax-case stx ()
+      [(_ ch) (with-syntax ([c (char->integer (syntax->datum #'ch))])
+                #'(== c))])))
+
+(define ZERO    (char->integer #\0))
+(define ONE     (char->integer #\1))
+(define NINE    (char->integer #\9))
+
+(define (onenine-byte? c)
+  (and (integer? c) (>= c ONE) (<= c NINE)))
+
+(define (digit-byte? c)
+  (and (integer? c)
+       (or (= ZERO c)
+           (onenine-byte? c))))
+
+(define (ws-byte? c)
+  (or (= c #x20)
+      (= c #x0a)
+      (= c #x0d)
+      (= c #x09)))
 
 ;; read-json-string
 ;; input-port -> string
@@ -69,6 +94,90 @@
   (-test-string (string #\\ #\\ #\") (string #\\))
   (-test-string (~a "hello " (string #\\ #\") "world" (string #\\ #\" #\"))
                 (~a "hello " (string #\") "world" (string #\"))))
+
+(define (byte->number c) (- c ZERO))
+
+(define (read-json-number inp)
+  (match (read-byte inp)
+    [(char-byte #\0)     (read-zero inp #t)]
+    [(char-byte #\-)     (read-negative-number inp)]
+    [(? onenine-byte? c) (read-number inp #t (byte->number c))]))
+
+(define (read-zero inp pos?)
+  (match (peek-byte inp)
+    [(or (? eof-object?) (? ws-byte?)) 0]
+    [(char-byte #\.) (read-number inp pos? 0)]))
+
+(define (read-negative-number inp)
+  (match (peek-byte inp)
+    [(char-byte #\0)
+     (read-byte inp)
+     (read-zero inp #f)]
+    [(? onenine-byte?) (read-number inp #f 0)]))
+
+(define (read-number inp pos? n)
+  (define (peek1) (peek-byte inp))
+  (define (read1) (read-byte inp))
+  ; XXX: parameter to alter reading exactly
+  (define (build-number num exp inexact-result?)
+    (define exactness (if inexact-result? exact->inexact values))
+    (define sign (if pos? 1 -1))
+    (exactness (* sign num (expt 10 exp))))
+  (define (read-integer n)
+    (match (peek1)
+      [(or (? eof-object?) (? ws-byte?))
+       (build-number n 0 #f)]
+      [(? digit-byte?)
+       (read-integer (+ (* 10 n) (byte->number (read1))))]
+      [(or (char-byte #\E) (char-byte #\e))
+       (read1)
+       (read-expt n 0 0)]
+      [(char-byte #\.)
+       (read1)
+       (read-fraction n 0)]))
+  (define (read-fraction n p)
+    (match (peek1)
+      [(or (? eof-object?) (? ws-byte?))
+       (build-number n p #t)]
+      [(? digit-byte?)
+       (read-fraction (+ (* 10 n) (byte->number (read1))) (sub1 p))]
+      [(or (char-byte #\E) (char-byte #\e))
+       (read1)
+       (read-expt n p 0)]))
+  (define (read-expt n p e)
+    (match (peek1)
+      [(or (? eof-object?) (? ws-byte?))
+       (build-number n (+ p e) #t)]
+      [(? digit-byte?)
+       (read-expt n p (+ (* 10 e) (byte->number (read1))))]))
+  (read-integer n))
+
+(module+ test
+  (define-syntax -test-number
+    (syntax-rules ()
+      [(_ input expected)
+       (test-equal? input (call-with-input-string input read-json-number) expected)]))
+
+  (-test-number "0" 0)
+  (-test-number "1" 1)
+  (-test-number "42" 42)
+  (-test-number "-1" -1)
+  (-test-number "-42" -42)
+  (-test-number "-0" 0)
+  (-test-number "0.314159" 0.314159)
+  (-test-number "-0.31" -0.31)
+  (-test-number "3.14159" 3.14159)
+
+  (-test-number "1.23456e4" 12345.6)
+  (-test-number "1.23456e5" 123456.0)
+  (-test-number "0.314159e1" 3.14159)
+  (-test-number "1e5" 1e5)
+  (-test-number "123e5" 123e5)
+
+  ;; 3. is invalid
+  ;; 3e is invalid
+  ;; 0123 is invalid
+  )
 
 (define (port->source-location port)
   (and (port-counts-lines? port)
