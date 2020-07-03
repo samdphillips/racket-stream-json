@@ -25,6 +25,8 @@
 (define ZERO    (char->integer #\0))
 (define ONE     (char->integer #\1))
 (define NINE    (char->integer #\9))
+(define SLASH   (char->integer #\\))
+(define U       (char->integer #\u))
 
 (define (onenine-byte? c)
   (and (integer? c) (>= c ONE) (<= c NINE)))
@@ -40,6 +42,31 @@
       (= c #x0d)
       (= c #x09)))
 
+(define (decode-hex1 inp)
+  (define (err)
+    (error 'read-json-string "expected hex char"))
+  (define c (read-byte inp))
+  (cond
+    [(digit-byte? c) (bitwise-and #xF c)]
+    [else
+      (define x (arithmetic-shift c -3))
+      (define y (bitwise-and #b111 c))
+      (cond
+        [(and (or (= x 12) (= x 8))
+              (<= 1 y 6))
+         (+ 9 y)]
+        [else (err)])]))
+
+(define (decode-hex inp)
+  (define a (decode-hex1 inp))
+  (define b (decode-hex1 inp))
+  (define c (decode-hex1 inp))
+  (define d (decode-hex1 inp))
+  (+ (arithmetic-shift a 12)
+     (arithmetic-shift b 8)
+     (arithmetic-shift c 4)
+     d))
+
 ;; read-json-string
 ;; input-port -> string
 ;; XXX: add rest of escapes
@@ -47,20 +74,44 @@
 (define (read-json-string inp)
   (define buf (make-string-buf))
   (define (decode-escape)
-    (match (read-char inp)
-      [#\\ (string-buf-write-char! buf #\\)]
-      [#\n (string-buf-write-char! buf #\newline)]
-      [#\" (string-buf-write-char! buf #\")]
+    (match (read-byte inp)
+      [(char-byte #\") (string-buf-write-char! buf #\")]
+      [(char-byte #\\) (string-buf-write-char! buf #\\)]
+      [(char-byte #\/) (string-buf-write-char! buf #\/)]
+      [(char-byte #\b) (string-buf-write-char! buf #\backspace)]
+      [(char-byte #\f) (string-buf-write-char! buf #\page)]
+      [(char-byte #\n) (string-buf-write-char! buf #\newline)]
+      [(char-byte #\r) (string-buf-write-char! buf #\return)]
+      [(char-byte #\t) (string-buf-write-char! buf #\tab)]
+      [(char-byte #\u) (decode-unichar)]
       [_   (error 'read-json-string "unknown escape")])
     (read-piece))
+  (define (decode-unichar)
+    (define (err)
+      (error 'read-json-string
+             "missing second half of surrogate pair"))
+    (define c (decode-hex inp))
+    (define ch
+      (cond
+        [(<= #xD800 c #xDFFF)
+         (unless (= SLASH (read-byte inp)) (err))
+         (unless (= U     (read-byte inp)) (err))
+         (define c2 (decode-hex inp))
+         (if (<= #xDC00 c2 #xDFFF)
+             (integer->char
+               (+ (arithmetic-shift (- c #xD800) 10) (- c2 #xDC00) #x10000))
+             (err))]
+        [else
+          (integer->char c)]))
+    (string-buf-write-char! buf ch))
   (define (decode-utf8 c)
     ; XXX: parameter for permissive decoding
     (decode-utf8-loop 0 1 (make-bytes 6 c) (bytes-open-converter "UTF-8" "UTF-8")))
-  (define (decode-utf8-loop start end buf conv)
-    (define-values (wamt ramt state) (bytes-convert conv buf start end buf 0 6))
+  (define (decode-utf8-loop start end ubuf conv)
+    (define-values (wamt ramt state) (bytes-convert conv ubuf start end ubuf 0 6))
     (match state
       ['complete
-       (string-buf-write-char! buf (bytes-utf-8-ref buf 0))
+       (string-buf-write-char! buf (bytes-utf-8-ref ubuf 0))
        (read-piece)]
       ['error
        ; XXX:
@@ -70,16 +121,16 @@
        (cond
          [(eof-object? c) (error 'read-json-string "eof in string")]
          [else
-           (bytes-set! buf end c)
-           (decode-utf8-loop (+ start ramt) (add1 end) buf conv)])]))
+           (bytes-set! ubuf end c)
+           (decode-utf8-loop (+ start ramt) (add1 end) ubuf conv)])]))
   (define (seven-bit? c) (< c 128))
   (define (read-piece)
     (match (read-byte inp)
-      [(? eof-object?)          (error 'read-json-string "eof in string")]
-      [(== (char->integer #\")) (string-buf->string buf)]
-      [(== (char->integer #\\)) (decode-escape)]
-      [(? seven-bit? c)         (string-buf-write-byte! buf c) (read-piece)]
-      [c                        (decode-utf8 c)]))
+      [(? eof-object?)  (error 'read-json-string "eof in string")]
+      [(char-byte #\")  (string-buf->string buf)]
+      [(char-byte #\\)  (decode-escape)]
+      [(? seven-bit? c) (string-buf-write-byte! buf c) (read-piece)]
+      [c                (decode-utf8 c)]))
 
   (read-piece))
 
@@ -213,7 +264,6 @@
             (and (port-counts-lines? inp)
                  (build-source-location-vector
                   start-loc (port->source-location inp))))])
-    ;; XXX: make codepoints constants (or match macro?)
     (match (peek-byte inp)
       [(? eof-object? v) v]
 

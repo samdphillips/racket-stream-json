@@ -7,6 +7,7 @@
          racket/string
          rackunit
 
+         json
          json/stream)
 
 (provide test-file->list)
@@ -75,9 +76,17 @@
       (stream->list
         (port->json-stream inp #:well-formed? #t)))))
 
+(define (test-file-json fname)
+  (define p (build-path test-files-path fname))
+  (writeln (file->bytes p))
+  (call-with-input-file p read-json))
+
 (module* main #f
-  (test-file->list
-    (vector-ref (current-command-line-arguments) 0)))
+  (require racket/match)
+
+  (match (current-command-line-arguments)
+    [(vector fname)        (test-file->list fname)]
+    [(vector "json" fname) (test-file-json fname)]))
 
 (module* test #f
   (require racket/match
