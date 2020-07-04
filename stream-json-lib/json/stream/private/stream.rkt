@@ -74,13 +74,13 @@
   (define ((check-array-delim k) v s1 s0)
     (match v
       [(json-delimiter _ #\,)  (next (check-array-value k) s1)]
-      [(? json-array-end?) (stream* v (next k s1))]
-      [_ (wf-error '(#\, array-end) v)]))
+      [(? json-array-end?)     (stream* v (next k s1))]
+      [_ (wf-error 'array-delim '(#\, array-end) v)]))
 
   (define ((check-array-value k) v s1 s0)
     (match v
       [(? json-array-end?)
-       (stream* v (next k s1))]
+       (wf-error 'array-value '(array-value) v)]
       [_ (next (check-value (check-array-delim k)
                             'array-value
                             '(array-end))
@@ -144,7 +144,7 @@
                            (json-stream/well-formed
                             (list (json-delimiter #f #\:)))))))
 
-  (test-case "json-stream/well-formed array - ok"
+  (test-case "json-stream/well-formed array [42] - ok"
              (let ([s (list (json-array-start #f)
                             (json-value #f 42)
                             (json-array-end #f))])
@@ -152,19 +152,21 @@
                      [b (in-stream (json-stream/well-formed s))])
                  (check-equal? a b))))
 
-  (test-case "json-stream/well-formed array - ok"
-             (let ([s (list (json-array-start #f)
-                            (json-value #f 42)
-                            (json-delimiter #f #\,)
-                            (json-value #f 3)
-                            (json-delimiter #f #\,)
-                            (json-value #f 4)
-                            (json-delimiter #f #\,)
-                            (json-array-end #f))])
-               (for ([expected (sequence-filter (match-lambda
-                                                  [(json-delimiter _ #\,) #f]
-                                                  [_ #t])
-                                                (in-list s))]
+  (test-case "json-stream/well-formed array [42,3,4] - ok"
+             (let* ([s (list (json-array-start #f)
+                             (json-value #f 42)
+                             (json-delimiter #f #\,)
+                             (json-value #f 3)
+                             (json-delimiter #f #\,)
+                             (json-value #f 4)
+                             (json-array-end #f))]
+                    [expected-seq
+                      (sequence-filter
+                        (match-lambda
+                          [(json-delimiter _ #\,) #f]
+                          [_ #t])
+                        (in-list s))])
+               (for ([expected expected-seq]
                      [actual (in-stream (json-stream/well-formed s))])
                  (check-equal? actual expected))))
 

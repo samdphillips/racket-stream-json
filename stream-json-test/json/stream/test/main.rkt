@@ -68,13 +68,13 @@
                     (lambda ()
                       (call-with-input-file test-file-path parse-fn))))))))
 
-(define (test-file->list fname)
+(define (test-file->list fname [wf? #t])
   (define p (build-path test-files-path fname))
   (writeln (file->bytes p))
   (call-with-input-file p
     (lambda (inp)
       (stream->list
-        (port->json-stream inp #:well-formed? #t)))))
+        (port->json-stream inp #:well-formed? wf?)))))
 
 (define (test-file-json fname)
   (define p (build-path test-files-path fname))
@@ -85,8 +85,10 @@
   (require racket/match)
 
   (match (current-command-line-arguments)
-    [(vector fname)        (test-file->list fname)]
-    [(vector "json" fname) (test-file-json fname)]))
+    [(vector fname)          (test-file->list fname)]
+    [(vector "--nowf" fname) (test-file->list fname #f)]
+    [(vector "--wf" fname)   (test-file->list fname #t)]
+    [(vector "json" fname)   (test-file-json fname)]))
 
 (module* test #f
   (require racket/match
