@@ -68,13 +68,18 @@
                     (lambda ()
                       (call-with-input-file test-file-path parse-fn))))))))
 
+(define (make-all-tests parser-name parse-fn)
+  (test-suite "all minefield tests"
+              (make-success-tests parser-name parse-fn)
+              (make-failure-tests parser-name parse-fn)))
+
 (define (test-file->list fname [wf? #t])
   (define p (build-path test-files-path fname))
   (writeln (file->bytes p))
   (call-with-input-file p
     (lambda (inp)
-      (stream->list
-        (port->json-stream inp #:well-formed? wf?)))))
+      (for ([tok (port->json-stream inp #:well-formed? wf?)])
+        (writeln tok)))))
 
 (define (test-file-json fname)
   (define p (build-path test-files-path fname))
@@ -91,7 +96,8 @@
     [(vector "json" fname)   (test-file-json fname)]))
 
 (module* test #f
-  (require racket/match
+  (require racket/cmdline
+           racket/match
            rackunit/text-ui
            json)
 
@@ -103,15 +109,26 @@
         (read-all (stream-rest s))))
     (read-all s))
 
-  (define-values (name parser)
-    (match (current-command-line-arguments)
-      [(vector "json") (values "json" read-json)]
-      [(vector "stream-json-lib")
-       (values "stream-json-lib" read-all-json-stream)]
-      [(vector) (values "stream-json-lib" read-all-json-stream)]))
+  (define use-parser (make-parameter read-all-json-stream))
+  (define use-name   (make-parameter "stream-json-lib"))
+  (define use-tests  (make-parameter make-all-tests))
+
+  (command-line
+    #:once-each
+    ("--parser"
+     name ""
+     (use-name name)
+     (use-parser
+       (match name
+         ["json" read-json]
+         ["stream-json-lib" read-all-json-stream])))
+
+    #:once-any
+    ("-p" "positive tests"
+     (use-tests make-success-tests))
+    ("-n" "negative tests"
+     (use-tests make-failure-tests)))
 
   (run-tests
-    (test-suite "minefield tests"
-                (make-success-tests name parser)
-                (make-failure-tests name parser))))
+    ((use-tests) (use-name) (use-parser))))
 
