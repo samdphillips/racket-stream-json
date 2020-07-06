@@ -33,7 +33,7 @@
   error handler returns a stream of events to replace/splice into the
   output stream
 |#
-(define (json-stream/well-formed jst)
+(define (json-stream/well-formed jst #:multiple? [multiple? #f])
   ; XXX: use source location in reporting
   (define (wf-error state expected actual)
     (error 'json-stream/well-formed
@@ -42,90 +42,112 @@
            expected
            actual))
 
-  ;; XXX: error if hit end of stream
-  (define (next check s0)
-    (match s0
-      [(? stream-empty?) s0]
-      [(stream* v s1) (check v s1 s0)]))
+  (define (empty-error error-tag expects)
+    (wf-error error-tag expects "end of stream"))
 
-  (define ((check-value k [error-tag 'value] [expects null]) v s1 s0)
-    (match v
-      [(? json-value?)
+  (define (next check s0) (check s0))
+
+  (define ((check-value k allow-empty? error-tag expects) s0)
+    (match s0
+      [(? stream-empty?)
+       (cond
+         [allow-empty? s0]
+         [else
+           (empty-error error-tag expects)])]
+      [(stream* (? json-value? v) s1)
        (stream* v (next k s1))]
-      [(? json-array-start?)
+      [(stream* (? json-array-start? v) s1)
        (stream* v (next (check-array-start k) s1))]
-      [(? json-object-start?)
+      [(stream* (? json-object-start? v) s1)
        (stream* v (next (check-object-start k) s1))]
-      [_
+      [(stream* v _)
        (wf-error error-tag
                  (append expects
                          '(atom array-start object-start))
                  v)]))
 
-  (define ((check-array-start k) v s1 s0)
-    (match v
-      [(? json-array-end?)
+  (define ((check-array-start k) s0)
+    (match s0
+      [(stream* (? json-array-end? v) s1)
        (stream* v (next k s1))]
       [_ (next (check-value (check-array-delim k)
+                            #f
                             'array-start
-                            '(array-end))
+                            '(atom
+                              object-start
+                              array-start
+                              array-end))
                s0)]))
 
-  (define ((check-array-delim k) v s1 s0)
-    (match v
-      [(json-delimiter _ #\,)  (next (check-array-value k) s1)]
-      [(? json-array-end?)     (stream* v (next k s1))]
-      [_ (wf-error 'array-delim '(#\, array-end) v)]))
+  (define ((check-array-delim k) s0)
+    (match s0
+      [(stream* (json-delimiter _ #\,) s1)
+       (next (check-array-value k) s1)]
+      [(stream* (? json-array-end? v) s1)
+       (stream* v (next k s1))]
+      [(stream* v _)
+       (wf-error 'array-delim '(#\, array-end) v)]))
 
-  (define ((check-array-value k) v s1 s0)
-    (match v
-      [(? json-array-end?)
+  (define ((check-array-value k) s0)
+    (match s0
+      [(stream* (? json-array-end? v) _)
        (wf-error 'array-value '(array-value) v)]
       [_ (next (check-value (check-array-delim k)
+                            #f
                             'array-value
                             '(array-end))
                s0)]))
 
-  (define ((check-object-start k) v s1 s0)
-    (match v
-      [(? json-object-end? v)
+  (define ((check-object-start k) s0)
+    (match s0
+      [(stream* (? json-object-end? v) s1)
        (stream* v (next k s1))]
-      [(json-value loc (? string? v))
+      [(stream* (json-value loc (? string? v)) s1)
        (stream* (json-member-start loc v)
                 (next (check-object-kv-delim k) s1))]
-      [_ (wf-error 'object-start '(object-key object-end) v)]))
+      [(stream* v _) (wf-error 'object-start '(object-key object-end) v)]))
 
-  (define ((check-object-key k) v s1 s0)
-    (match v
-      [(json-value _ (? string?))
+  (define ((check-object-key k) s0)
+    (match s0
+      [(stream* (and v (json-value _ (? string?))) s1)
        (stream* v (next (check-object-kv-delim k) s1))]
-      [_ (wf-error 'object-key '(object-key) v)]))
+      [(stream* v _) (wf-error 'object-key '(object-key) v)]))
 
-  (define ((check-object-kv-delim k) v s1 s0)
-    (match v
-      [(json-delimiter _ #\:)
+  (define ((check-object-kv-delim k) s0)
+    (match s0
+      [(stream* (json-delimiter _ #\:) s1)
        (next (check-value (check-object-delim k)
-                          'object-value)
+                          #f
+                          'object-value
+                          '(atom object-start array-start))
              s1)]
-      [_ (wf-error 'object-kv-delim '(#\:) v)]))
+      [(stream* v _) (wf-error 'object-kv-delim '(#\:) v)]))
 
-  (define ((check-object-delim k) v s1 s0)
-    (match v
-      [(json-object-end loc)
+  (define ((check-object-delim k) s0)
+    (match s0
+      [(stream* (and v (json-object-end loc)) s1)
        (stream* (json-member-end loc) v (next k s1))]
-      [(json-delimiter loc #\,)
+      [(stream* (json-delimiter loc #\,) s1)
        (stream* (json-member-end loc) (next (check-object-key k) s1))]
-      [_ (wf-error 'object-delim '(object-end #\,) v)]))
+      [(stream* v _) (wf-error 'object-delim '(object-end #\,) v)]))
 
-  (next (letrec ([k (lambda (v s1 s0) ((check-value k) v s1 s0))])
-          (check-value k))
-        jst))
+  (define topk
+    (if multiple?
+        (lambda (s)
+          ((check-value topk #t 'value '(atom object-start array-start)) s))
+        (lambda (s)
+          (cond
+            [(not (stream-empty? s))
+             (wf-error 'end '(empty-stream) (stream-first s))]
+            [else s]))))
+
+  (next (check-value topk #t 'value '(atom object-start array-start)) jst))
 
 (module+ test
   (test-case "json-stream/well-formed atoms - ok"
              (let ([s (list (json-value #f 1) (json-value #f 2))])
                (for ([a (in-list s)]
-                     [b (in-stream (json-stream/well-formed s))])
+                     [b (in-stream (json-stream/well-formed s #:multiple? #t))])
                  (check-equal? a b))))
 
   (test-case "json-stream/well-formed atoms - not empty stream"
