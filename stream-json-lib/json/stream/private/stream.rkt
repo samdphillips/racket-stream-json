@@ -2,7 +2,9 @@
 
 (provide port->json-stream
          json-stream/well-formed
-         make-json-stream-fold)
+         make-json-stream-fold
+         json-stream->jsexpr
+         jsexpr->json-stream)
 
 (require racket/generator
          racket/match
@@ -247,6 +249,8 @@
                      [a (in-stream (json-stream/well-formed in))])
                  (check-equal? a b))))
 
+  ; XXX: malformed keys that are not strings
+
   (test-case "json-stream/well-formed object - malformed kv sequence"
              (let ([s (list (json-object-start #f)
                             (json-value #f "foo")
@@ -260,6 +264,7 @@
                             (stream->list (json-stream/well-formed s)))))))
 
 ;; XXX: flag to read a single item from the stream
+;; XXX: maybe should use a foldable type that could have overriden parts?
 (define (make-json-stream-fold
          #:on-value        on-value
          #:on-array-start  on-array-start
@@ -376,6 +381,9 @@
                   [(k) (string->symbol k)])
        (json-stream->jsexpr-hash (hash-set acc k v) s))]))
 
+;; XXX: parameter for handling object keys as symbols or strings
+
+;; FIXME: this is useful as demonstration, but the above do the same in practice?
 (define jsexpr-fold
   (make-json-stream-fold
    #:on-value

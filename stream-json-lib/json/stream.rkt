@@ -3,6 +3,7 @@
 (require racket/contract
          racket/stream
          syntax/srcloc
+         json
 
          json/stream/private/reader
          json/stream/private/stream
@@ -46,4 +47,9 @@
        #:on-object-end   (-> any/c any/c json-object-end? any)
        #:on-member-start (-> any/c json-member-start? any)
        #:on-member-end   (-> any/c string? any/c json-member-end? any)
-       (-> any/c (stream/c json-event?) any)))))
+       (-> any/c (stream/c json-event?) any)))
+
+ (json-stream->jsexpr
+   (-> (stream/c json-event?) (values jsexpr? (stream/c json-event?))))
+ (jsexpr->json-stream
+   (-> jsexpr? (stream/c json-event?)))))
