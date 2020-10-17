@@ -109,8 +109,9 @@
 
   (define ((check-object-key k) s0)
     (match s0
-      [(stream* (and v (json-value _ (? string?))) s1)
-       (stream* v (next (check-object-kv-delim k) s1))]
+      [(stream* (json-value loc (? string? v)) s1)
+       (stream* (json-member-start loc v)
+                (next (check-object-kv-delim k) s1))]
       [(stream* v _) (wf-error 'object-key '(object-key) v)]))
 
   (define ((check-object-kv-delim k) s0)
@@ -217,6 +218,35 @@
                      [a (in-stream (json-stream/well-formed in))])
                  (check-equal? a b))))
 
+  (test-case "json-stream/well-formed object multiple kv pairs - ok"
+             (let ([in (list (json-object-start #f)
+                             (json-value #f "a")
+                             (json-delimiter #f #\:)
+                             (json-value #f "b")
+                             (json-delimiter #f #\,)
+                             (json-value #f "c")
+                             (json-delimiter #f #\:)
+                             (json-value #f "d")
+                             (json-delimiter #f #\,)
+                             (json-value #f "e")
+                             (json-delimiter #f #\:)
+                             (json-value #f "f")
+                             (json-object-end #f))]
+                   [out (list (json-object-start #f)
+                              (json-member-start #f "a")
+                              (json-value #f "b")
+                              (json-member-end #f)
+                              (json-member-start #f "c")
+                              (json-value #f "d")
+                              (json-member-end #f)
+                              (json-member-start #f "e")
+                              (json-value #f "f")
+                              (json-member-end #f)
+                              (json-object-end #f))])
+               (for ([b (in-list out)]
+                     [a (in-stream (json-stream/well-formed in))])
+                 (check-equal? a b))))
+
   (test-case "json-stream/well-formed object - malformed kv sequence"
              (let ([s (list (json-object-start #f)
                             (json-value #f "foo")
@@ -300,7 +330,19 @@
                (json-value #f 42)
                (json-member-end #f)
                (json-object-end #f)))
-   '(#hasheq([a . 42]))))
+   '(#hasheq([a . 42])))
+
+  (check-equal?
+   (jsexpr-fold
+    null (list (json-object-start #f)
+               (json-member-start #f "a")
+               (json-value #f 42)
+               (json-member-end #f)
+               (json-member-start #f "b")
+               (json-value #f 43)
+               (json-member-end #f)
+               (json-object-end #f)))
+   '(#hasheq([a . 42] [b . 43]))))
 
 ;; json-stream->jsexpr
 ;; stream[json-event] -> <jsexpr, stream[json-event]>
