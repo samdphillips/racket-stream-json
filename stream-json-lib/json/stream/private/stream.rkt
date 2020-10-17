@@ -3,6 +3,7 @@
 (provide port->json-stream
          json-stream/well-formed
          make-json-stream-fold
+         jsexpr-object-key-converter
          json-stream->jsexpr
          jsexpr->json-stream)
 
@@ -349,6 +350,9 @@
                (json-object-end #f)))
    '(#hasheq([a . 42] [b . 43]))))
 
+(define jsexpr-object-key-converter
+  (make-parameter string->symbol))
+
 ;; json-stream->jsexpr
 ;; stream[json-event] -> <jsexpr, stream[json-event]>
 ;; expects a well formed stream of events
@@ -378,10 +382,8 @@
     [(stream* (json-member-end _) s) (json-stream->jsexpr-hash acc s)]
     [(stream* (json-member-start _ k) s)
      (let-values ([(v s) (json-stream->jsexpr s)]
-                  [(k) (string->symbol k)])
+                  [(k) ((jsexpr-object-key-converter) k)])
        (json-stream->jsexpr-hash (hash-set acc k v) s))]))
-
-;; XXX: parameter for handling object keys as symbols or strings
 
 ;; FIXME: this is useful as demonstration, but the above do the same in practice?
 (define jsexpr-fold
@@ -451,7 +453,25 @@
                (let-values ([(v s) (json-stream->jsexpr e*)])
                  (check-equal? v (hasheq 'a (list 1 2 3)
                                          'b (list 4 5 6)))
-                 (check-true (stream-empty? s))))))
+                 (check-true (stream-empty? s)))))
+
+  (test-case "json-stream->jsexpr hash use key converter"
+             (let ([e* (list (json-object-start #f)
+                             (json-member-start #f "a")
+                             (json-value #f 1)
+                             (json-member-end #f)
+                             (json-member-start #f "b")
+                             (json-value #f 4)
+                             (json-member-end #f)
+                             (json-object-end #f))])
+               (parameterize ([jsexpr-object-key-converter values])
+                 (let-values ([(v s) (json-stream->jsexpr e*)])
+                   (check-equal? v (hasheq "a" 1 "b" 4))
+                   (check-true (stream-empty? s))))))
+
+
+
+             )
 
 ;; jsexpr->json-stream
 ;; jsexpr -> stream[json-event]

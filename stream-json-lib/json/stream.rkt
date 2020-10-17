@@ -49,7 +49,9 @@
        #:on-member-end   (-> any/c string? any/c json-member-end? any)
        (-> any/c (stream/c json-event?) any)))
 
- (json-stream->jsexpr
-   (-> (stream/c json-event?) (values jsexpr? (stream/c json-event?))))
- (jsexpr->json-stream
-   (-> jsexpr? (stream/c json-event?)))))
+  (jsexpr-object-key-converter (parameter/c (-> string? any)))
+
+  (json-stream->jsexpr
+    (-> (stream/c json-event?) (values any/c (stream/c json-event?))))
+  (jsexpr->json-stream
+    (-> jsexpr? (stream/c json-event?)))))
