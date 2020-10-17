@@ -69,7 +69,6 @@
 
 ;; read-json-string
 ;; input-port -> string
-;; XXX: add rest of escapes
 ;; XXX: json specific exn
 (define (read-json-string inp)
   (define buf (make-string-buf))
@@ -186,12 +185,20 @@
        (read-expt n 0)]
       [(char-byte #\.)
        (read1)
-       (read-fraction n 0)]
+       (read-fraction1 n)]
       [_ (build-number n 0 #f)]))
-  (define (read-fraction n p)
+  (define (read-fraction1 n)
     (match (peek1)
       [(? digit-byte?)
-       (read-fraction (+ (* 10 n) (byte->number (read1))) (sub1 p))]
+       (read-fraction* (+ (* 10 n) (byte->number (read1))) -1)]
+      [(or (char-byte #\E) (char-byte #\e))
+       (read1)
+       (read-expt n 0)]
+      [_ (error 'read-number "expected at least one digit after '.'")]))
+  (define (read-fraction* n p)
+    (match (peek1)
+      [(? digit-byte?)
+       (read-fraction* (+ (* 10 n) (byte->number (read1))) (sub1 p))]
       [(or (char-byte #\E) (char-byte #\e))
        (read1)
        (read-expt n p)]
