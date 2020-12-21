@@ -10,7 +10,7 @@
          json/stream/private/types)
 
 (provide
- (contract-out
+ (contract-out #:unprotected-submodule unsafe
   (struct json-value
     [(location source-location?)
      (v (or/c number? string? boolean? 'null))])
