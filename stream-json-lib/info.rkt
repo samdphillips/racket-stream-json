@@ -4,4 +4,4 @@
 (define version "0.1")
 (define pkg-authors '(samdphillips))
 (define deps '("base"))
-(define build-deps '())
+(define build-deps '("rackunit-lib"))
